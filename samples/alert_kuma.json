@@ -1,0 +1,80 @@
+{
+  "CorrelationRuleName": "[R] Brute force: many failed logons followed by success",
+  "Priority": "high",
+  "Timestamp": "2026-10-28T09:18:44Z",
+  "Description": "8 неудачных RDP-входов под учётной записью admin с внешнего адреса, затем успешный вход",
+  "events": [
+    {
+      "Timestamp": "2026-10-28T09:10:00Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:11:01Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:12:02Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:13:03Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:14:04Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:15:05Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:16:06Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:17:07Z",
+      "DeviceEventClassID": "4625",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    },
+    {
+      "Timestamp": "2026-10-28T09:18:44Z",
+      "DeviceEventClassID": "4624",
+      "SourceAddress": "45.155.205.233",
+      "DestinationHostName": "SRV-RDP-01",
+      "DestinationUserName": "admin",
+      "DeviceCustomNumber3": 10
+    }
+  ]
+}

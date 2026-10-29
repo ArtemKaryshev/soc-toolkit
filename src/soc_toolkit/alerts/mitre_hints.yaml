@@ -1,0 +1,34 @@
+# Эвристики: признак в тексте алерта -> техника MITRE ATT&CK.
+# Регулярные выражения без учёта регистра. Это подсказки аналитику, а не детект.
+- {pattern: '\s-(e|en|enc|enco|encodedcommand)\s', technique: T1059.001, reason: "PowerShell с закодированной командой"}
+- {pattern: 'powershell|pwsh', technique: T1059.001, reason: "Запуск PowerShell"}
+- {pattern: 'cmd(\.exe)?\s+/c', technique: T1059.003, reason: "Командная оболочка cmd"}
+- {pattern: 'wscript|cscript|\.vbs\b', technique: T1059.005, reason: "Windows Script Host / VBS"}
+- {pattern: 'downloadstring|downloadfile|invoke-webrequest|iwr\s|wget\s|curl\s|bitsadmin|certutil.+urlcache', technique: T1105, reason: "Загрузка файла из сети"}
+- {pattern: 'certutil.+-decode|frombase64string', technique: T1140, reason: "Декодирование полезной нагрузки"}
+- {pattern: 'mshta', technique: T1218.005, reason: "Запуск через mshta"}
+- {pattern: 'regsvr32', technique: T1218.010, reason: "Запуск через regsvr32"}
+- {pattern: 'rundll32', technique: T1218.011, reason: "Запуск через rundll32"}
+- {pattern: 'lsass', technique: T1003.001, reason: "Обращение к памяти LSASS"}
+- {pattern: 'mimikatz|sekurlsa|kerberos::', technique: T1003, reason: "Признаки Mimikatz"}
+- {pattern: 'ntds\.dit|ntdsutil', technique: T1003.003, reason: "Работа с NTDS.dit"}
+- {pattern: '\b4625\b|failed logon|brute', technique: T1110, reason: "Неудачные входы / подбор"}
+- {pattern: '\b4769\b.*0x17|kerberoast', technique: T1558.003, reason: "Kerberoasting"}
+- {pattern: 'schtasks|\b4698\b|scheduled task', technique: T1053.005, reason: "Запланированная задача"}
+- {pattern: '\b7045\b|\b4697\b|sc(\.exe)?\s+create|psexesvc', technique: T1543.003, reason: "Создание службы"}
+- {pattern: 'psexec|admin\$|\\c\$', technique: T1021.002, reason: "SMB / административные шары"}
+- {pattern: 'wmic|win32_process', technique: T1047, reason: "WMI"}
+- {pattern: 'currentversion\\run', technique: T1547.001, reason: "Автозапуск через Run-ключи"}
+- {pattern: 'vssadmin.+delete|wbadmin.+delete|bcdedit.+recoveryenabled', technique: T1490, reason: "Удаление теневых копий / отключение восстановления"}
+- {pattern: 'wevtutil\s+cl|\b1102\b|clear-eventlog', technique: T1070.001, reason: "Очистка журналов"}
+- {pattern: 'set-mppreference|disablerealtimemonitoring|\b5001\b', technique: T1562.001, reason: "Отключение средств защиты"}
+- {pattern: 'whoami|net\s+user|net\s+group|nltest|systeminfo|ipconfig', technique: T1087, reason: "Разведка учётных записей/системы"}
+- {pattern: 'phish|\.docm|\.xlsm|attachment|вложени', technique: T1566.001, reason: "Фишинговое вложение"}
+- {pattern: 'winword|excel\.exe|outlook\.exe', technique: T1204.002, reason: "Запуск из офисного приложения"}
+- {pattern: '\b4720\b|net\s+user\s+\S+\s+\S+\s+/add', technique: T1136, reason: "Создание учётной записи"}
+- {pattern: '\b47(28|32|56)\b|localgroup.+/add', technique: T1098, reason: "Добавление в привилегированную группу"}
+- {pattern: 'rdp|logon_type.?10|\b4778\b', technique: T1021.001, reason: "RDP"}
+- {pattern: 'ngrok|chisel|plink|cloudflared', technique: T1572, reason: "Туннелирование"}
+- {pattern: 'rclone|mega\.nz|transfer\.sh|anonfiles', technique: T1567, reason: "Выгрузка в облачный сервис"}
+- {pattern: '"spf":\s*"(fail|softfail)"|"dmarc":\s*"fail"|spf=fail|dmarc=fail', technique: T1566, reason: "Отправитель не прошёл проверку SPF/DMARC"}
+- {pattern: 'clicked|proxy_allowed|перешёл по ссылке', technique: T1204.001, reason: "Пользователь перешёл по ссылке из письма"}

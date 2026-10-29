@@ -1,0 +1,12 @@
+From: "IT Support" <support@micros0ft-helpdesk[.]com>
+To: ivan.petrov@corp.local
+Subject: Срочно: подтвердите пароль
+Received: from mail.micros0ft-helpdesk.com (185.220.101[.]45) by mx.corp.local (10.10.5.20)
+
+Здравствуйте! Ваш пароль истекает. Перейдите по ссылке:
+hxxps://login-micros0ft-helpdesk[.]com/owa/auth.php?u=ivan.petrov
+
+Вложение: invoice_2026.docm
+SHA256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+MD5: 44d88612fea8a8f36de82e1278abb02f
+Связанная уязвимость: CVE-2023-36884

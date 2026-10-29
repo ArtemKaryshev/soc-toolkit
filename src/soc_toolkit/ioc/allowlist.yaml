@@ -1,0 +1,61 @@
+# Встроенный список заведомо легитимных индикаторов.
+# Такие IOC не удаляются, а помечаются тегом "allowlisted" и по умолчанию
+# не отправляются на проверку репутации. Свой список можно указать в config.toml
+# (ioc.allowlist_file) в том же формате.
+
+domains:  # совпадение по суффиксу: microsoft.com покрывает login.microsoft.com
+  - microsoft.com
+  - microsoftonline.com
+  - windows.com
+  - windowsupdate.com
+  - office.com
+  - office365.com
+  - outlook.com
+  - live.com
+  - azure.com
+  - azureedge.net
+  - msftncsi.com
+  - digicert.com
+  - verisign.com
+  - google.com
+  - googleapis.com
+  - gstatic.com
+  - gmail.com
+  - youtube.com
+  - apple.com
+  - icloud.com
+  - mozilla.org
+  - mozilla.net
+  - github.com
+  - githubusercontent.com
+  - cloudflare.com
+  - akamai.net
+  - akamaiedge.net
+  - amazonaws.com
+  - kaspersky.com
+  - kaspersky-labs.com
+  - yandex.ru
+  - ya.ru
+  - mail.ru
+  - vk.com
+  - w3.org
+  - schemas.microsoft.com
+  - example.com
+  - example.org
+  - example.net
+  - attack.mitre.org
+  - virustotal.com
+  - abuseipdb.com
+  - alienvault.com
+  - tryhackme.com
+
+ips:  # точные адреса или подсети CIDR
+  - 8.8.8.8
+  - 8.8.4.4
+  - 1.1.1.1
+  - 1.0.0.1
+  - 9.9.9.9
+  - 77.88.8.8
+  - 77.88.8.1
+
+hashes: []  # например, хэши легитимных корпоративных утилит

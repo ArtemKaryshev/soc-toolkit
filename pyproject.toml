@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soc-toolkit"
+version = "1.0.1"
+description = "Рабочее место аналитика SOC L1: IOC, отчёты по алертам, репутация, запросы SPL/KUMA, справочник ATT&CK/LOLBAS/EventID, история кейсов"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Artem Karyshev" }]
+dependencies = [
+    "streamlit>=1.50",
+    "pandas>=2.0",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "typer>=0.12",
+    "python-docx>=1.1",
+    "Markdown>=3.5",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.10", "types-requests", "types-PyYAML"]
+
+[project.scripts]
+soc-toolkit = "soc_toolkit.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+soc_toolkit = [
+    "reference/data/*",
+    "queries/templates/*.yaml",
+    "reports/templates/*",
+    "alerts/*.yaml",
+    "ioc/*.yaml",
+    "ui/*.py",
+    "ui/tabs/*.py",
+    "config.example.toml",
+    "reports/*.yaml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003", "SIM905"]  # кириллица в строках — норма; списки слов через split() читаемее
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
+files = ["src/soc_toolkit"]
+exclude = ["src/soc_toolkit/ui/"]
+
+[tool.coverage.run]
+source = ["soc_toolkit"]
+omit = ["*/ui/*"]

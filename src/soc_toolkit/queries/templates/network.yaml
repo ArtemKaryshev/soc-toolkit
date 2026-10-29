@@ -1,0 +1,216 @@
+# Шаблоны запросов: сеть, DNS, прокси, почта, файлы.
+
+- id: by_ip
+  title: "Вся активность по IP"
+  category: Расследование
+  description: "События, где адрес встречается как источник или назначение, по хостам и источникам данных."
+  params:
+    ip: {label: "IP-адрес", default: "185.220.101.45"}
+  spl: |
+    index=* earliest={{ earliest }} (src_ip="{{ ip|q }}" OR dest_ip="{{ ip|q }}" OR src="{{ ip|q }}"
+        OR dest="{{ ip|q }}" OR DestinationIp="{{ ip|q }}" OR "{{ ip|q }}")
+    | stats count, values(sourcetype) AS sourcetypes, values(user) AS users, min(_time) AS first, max(_time) AS last
+        BY host
+    | convert ctime(first) ctime(last)
+    | sort - count
+  kuma: |
+    SELECT Timestamp, DeviceProduct, DeviceEventClassID, Name, SourceAddress, DestinationAddress,
+      SourceUserName, DestinationUserName, DeviceHostName
+    FROM `events`
+    WHERE SourceAddress = '{{ ip|sq }}' OR DestinationAddress = '{{ ip|sq }}' OR DeviceAddress = '{{ ip|sq }}'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: net_conn
+  title: "Процессы, подключавшиеся к IP (Sysmon 3)"
+  category: Сеть
+  description: "Какие процессы на каких хостах ходили на адрес."
+  mitre: [T1071]
+  params:
+    ip: {label: "IP-адрес", default: "185.220.101.45"}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=3 DestinationIp="{{ ip|q }}" earliest={{ earliest }}
+    | stats count, values(DestinationPort) AS ports, min(_time) AS first, max(_time) AS last BY host, Image, User
+    | convert ctime(first) ctime(last)
+    | sort - count
+  kuma: |
+    SELECT DeviceHostName, SourceProcessName, SourceUserName, DestinationPort, count(*) AS cnt
+    FROM `events`
+    WHERE DeviceEventClassID = '3' AND DestinationAddress = '{{ ip|sq }}'
+    GROUP BY DeviceHostName, SourceProcessName, SourceUserName, DestinationPort
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: firewall_ip
+  title: "Сессии на межсетевом экране по IP"
+  category: Сеть
+  description: "Разрешённые и заблокированные соединения с адресом, объём трафика."
+  mitre: [T1071, T1041]
+  params:
+    ip: {label: "IP-адрес", default: "185.220.101.45"}
+  spl: |
+    index={{ firewall_index }} (src_ip="{{ ip|q }}" OR dest_ip="{{ ip|q }}") earliest={{ earliest }}
+    | stats count, sum(bytes_out) AS bytes_out, sum(bytes_in) AS bytes_in, values(dest_port) AS ports,
+        values(action) AS actions BY src_ip, dest_ip
+    | eval mb_out=round(bytes_out/1024/1024, 2)
+    | sort - bytes_out
+  kuma: |
+    SELECT SourceAddress, DestinationAddress, groupUniqArray(DestinationPort) AS ports,
+      groupUniqArray(DeviceAction) AS actions, sum(BytesOut) AS bytes_out, sum(BytesIn) AS bytes_in, count(*) AS cnt
+    FROM `events`
+    WHERE SourceAddress = '{{ ip|sq }}' OR DestinationAddress = '{{ ip|sq }}'
+    GROUP BY SourceAddress, DestinationAddress
+    ORDER BY bytes_out DESC
+    LIMIT {{ kuma_limit }}
+
+- id: dns_domain
+  title: "DNS-запросы к домену (Sysmon 22 / DNS-сервер)"
+  category: Сеть
+  description: "Какие хосты и процессы резолвили домен и что получили в ответ."
+  mitre: [T1071.004]
+  params:
+    domain: {label: "Домен", default: "login-micros0ft-helpdesk.com"}
+  spl: |
+    (index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=22 QueryName="*{{ domain|q }}")
+    OR (index={{ dns_index }} query="*{{ domain|q }}")
+    earliest={{ earliest }}
+    | eval q=coalesce(QueryName, query), proc=coalesce(Image, "dns-server")
+    | stats count, values(QueryResults) AS answers, min(_time) AS first, max(_time) AS last BY host, proc, q
+    | convert ctime(first) ctime(last)
+    | sort - count
+  kuma: |
+    SELECT DeviceHostName, SourceProcessName, RequestUrl, DestinationDnsDomain, count(*) AS cnt
+    FROM `events`
+    WHERE RequestUrl ILIKE '%{{ domain|like }}' OR DestinationDnsDomain ILIKE '%{{ domain|like }}'
+       OR DestinationHostName ILIKE '%{{ domain|like }}'
+    GROUP BY DeviceHostName, SourceProcessName, RequestUrl, DestinationDnsDomain
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: dns_tunnel
+  title: "Подозрение на DNS-туннель / DGA"
+  category: Сеть
+  description: "Длинные поддомены и много уникальных запросов к одному домену второго уровня."
+  mitre: [T1071.004, T1568.002]
+  params:
+    threshold: {label: "Мин. уникальных поддоменов", default: "100", type: int}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=22 earliest={{ earliest }}
+    | eval parts=split(QueryName, "."), n=mvcount(parts),
+        sld=mvindex(parts, n-2).".".mvindex(parts, n-1), len=len(QueryName)
+    | stats dc(QueryName) AS uniq, avg(len) AS avg_len, max(len) AS max_len, values(Image) AS procs BY host, sld
+    | where uniq >= {{ threshold }} OR avg_len > 50
+    | sort - uniq
+  kuma: |
+    SELECT DeviceHostName, cutToFirstSignificantSubdomain(RequestUrl) AS sld,
+      uniq(RequestUrl) AS uniq_queries, avg(length(RequestUrl)) AS avg_len
+    FROM `events`
+    WHERE DeviceEventClassID = '22'
+    GROUP BY DeviceHostName, sld
+    HAVING uniq_queries >= {{ threshold }} OR avg_len > 50
+    ORDER BY uniq_queries DESC
+    LIMIT {{ kuma_limit }}
+
+- id: proxy_domain
+  title: "Обращения через прокси к домену или URL"
+  category: Сеть
+  description: "Пользователи и хосты, обращавшиеся к домену, коды ответа, объём, user-agent."
+  mitre: [T1071.001, T1105]
+  params:
+    domain: {label: "Домен или часть URL", default: "login-micros0ft-helpdesk.com"}
+  spl: |
+    index={{ proxy_index }} (url="*{{ domain|q }}*" OR dest="*{{ domain|q }}*") earliest={{ earliest }}
+    | stats count, values(status) AS status, values(http_method) AS methods, sum(bytes_out) AS bytes_out,
+        sum(bytes_in) AS bytes_in, values(http_user_agent) AS ua, min(_time) AS first, max(_time) AS last BY src, user, url
+    | convert ctime(first) ctime(last)
+    | sort - count
+  kuma: |
+    SELECT SourceAddress, SourceUserName, RequestUrl, RequestMethod, DeviceAction, count(*) AS cnt,
+      sum(BytesOut) AS bytes_out, sum(BytesIn) AS bytes_in
+    FROM `events`
+    WHERE RequestUrl ILIKE '%{{ domain|like }}%' OR DestinationHostName ILIKE '%{{ domain|like }}%'
+    GROUP BY SourceAddress, SourceUserName, RequestUrl, RequestMethod, DeviceAction
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: large_upload
+  title: "Крупные исходящие передачи данных"
+  category: Утечка
+  description: "Хосты, отправившие наружу больше порога (МБ): возможная эксфильтрация."
+  mitre: [T1041, T1567]
+  params:
+    threshold: {label: "Порог, МБ", default: "100", type: int}
+  spl: |
+    index={{ proxy_index }} OR index={{ firewall_index }} earliest={{ earliest }}
+    | stats sum(bytes_out) AS bytes_out, values(dest) AS destinations BY src, user
+    | eval mb_out=round(bytes_out/1024/1024, 1)
+    | where mb_out >= {{ threshold }}
+    | sort - mb_out
+  kuma: |
+    SELECT SourceAddress, SourceUserName, round(sum(BytesOut)/1048576, 1) AS mb_out,
+      groupUniqArray(10)(DestinationHostName) AS destinations
+    FROM `events`
+    WHERE BytesOut > 0
+    GROUP BY SourceAddress, SourceUserName
+    HAVING mb_out >= {{ threshold }}
+    ORDER BY mb_out DESC
+    LIMIT {{ kuma_limit }}
+
+- id: email_sender
+  title: "Письма от отправителя или с темой"
+  category: Почта
+  description: "Кому ещё пришло фишинговое письмо: получатели, вложения, действие шлюза."
+  mitre: [T1566]
+  params:
+    sender: {label: "Отправитель или домен (маска *)", default: "*@micros0ft-helpdesk.com"}
+    subject: {label: "Тема (маска *)", default: "*"}
+  spl: |
+    index={{ email_index }} src_user="{{ sender|q }}" subject="{{ subject|q }}" earliest={{ earliest }}
+    | stats count, values(recipient) AS recipients, values(file_name) AS attachments, values(action) AS actions,
+        min(_time) AS first, max(_time) AS last BY src_user, subject
+    | convert ctime(first) ctime(last)
+  kuma: |
+    SELECT Timestamp, SourceUserName AS sender, DestinationUserName AS recipient, Name AS subject,
+      FileName AS attachment, DeviceAction
+    FROM `events`
+    WHERE SourceUserName ILIKE '{{ sender|like }}' AND Name ILIKE '{{ subject|like }}'   -- поля зависят от нормализатора почтового шлюза
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: hash
+  title: "Поиск файла по хэшу"
+  category: Файлы
+  description: "Где встречался файл с таким хэшем (Sysmon 1/7/11/15/29, EDR, почтовый шлюз)."
+  mitre: [T1204]
+  params:
+    hash: {label: "Хэш (MD5/SHA1/SHA256)", default: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}
+  spl: |
+    index=* earliest={{ earliest }} ("{{ hash|q }}" OR Hashes="*{{ hash|upper|q }}*")
+    | table _time host sourcetype EventCode Image TargetFilename Hashes
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, DeviceProduct, FileName, FilePath, FileHash, SourceProcessName
+    FROM `events`
+    WHERE FileHash ILIKE '%{{ hash|like }}%' OR DeviceCustomString1 ILIKE '%{{ hash|like }}%'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: file_created
+  title: "Создание файлов по имени или расширению (Sysmon 11)"
+  category: Файлы
+  description: "Где и каким процессом создавался файл: поиск распространения полезной нагрузки."
+  mitre: [T1105]
+  params:
+    filename: {label: "Имя файла (маска *)", default: "*.ps1"}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=11 TargetFilename="*{{ filename|q }}" earliest={{ earliest }}
+    | stats count, values(TargetFilename) AS files, min(_time) AS first BY host, Image, User
+    | convert ctime(first)
+    | sort - count
+  kuma: |
+    SELECT DeviceHostName, SourceProcessName, SourceUserName, groupUniqArray(20)(FilePath) AS files, count(*) AS cnt
+    FROM `events`
+    WHERE DeviceEventClassID = '11' AND FilePath ILIKE '%{{ filename|like }}'
+    GROUP BY DeviceHostName, SourceProcessName, SourceUserName
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}

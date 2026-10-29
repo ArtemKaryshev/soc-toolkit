@@ -1,0 +1,233 @@
+# Шаблоны запросов: аутентификация и учётные записи.
+# Синтаксис шаблонов Jinja2. Доступны параметры из params и настройки окружения:
+# win_index, sysmon_index, sysmon_sourcetype, proxy_index, dns_index, email_index, firewall_index,
+# earliest, kuma_limit. Фильтры: q (экранировать для SPL "..."), sq (экранировать для SQL '...'),
+# like (маска * -> %, для SQL LIKE).
+# В KUMA период поиска задаётся в интерфейсе, поэтому в SQL времени нет.
+
+- id: bruteforce
+  title: "Подбор пароля: много неудачных входов (4625)"
+  category: Аутентификация
+  description: "Источники и учётки с числом неудачных входов выше порога."
+  mitre: [T1110.001]
+  params:
+    user: {label: "Пользователь (маска *)", default: "*"}
+    threshold: {label: "Порог", default: "10", type: int}
+  spl: |
+    index={{ win_index }} EventCode=4625 user="{{ user|q }}" earliest={{ earliest }}
+    | stats count AS failures, dc(user) AS users, values(user) AS accounts, values(Sub_Status) AS sub_status,
+        min(_time) AS first, max(_time) AS last BY src_ip, host
+    | where failures >= {{ threshold }}
+    | convert ctime(first) ctime(last)
+    | sort - failures
+  kuma: |
+    SELECT SourceAddress, DestinationHostName, count(*) AS failures,
+      groupUniqArray(DestinationUserName) AS accounts, min(Timestamp) AS first, max(Timestamp) AS last
+    FROM `events`
+    WHERE DeviceEventClassID = '4625' AND DestinationUserName ILIKE '{{ user|like }}'
+    GROUP BY SourceAddress, DestinationHostName
+    HAVING failures >= {{ threshold }}
+    ORDER BY failures DESC
+    LIMIT {{ kuma_limit }}
+
+- id: password_spraying
+  title: "Password spraying: один источник, много учёток"
+  category: Аутентификация
+  description: "Один IP пробует войти под многими разными учётными записями."
+  mitre: [T1110.003]
+  params:
+    threshold: {label: "Мин. число разных учёток", default: "10", type: int}
+  spl: |
+    index={{ win_index }} (EventCode=4625 OR EventCode=4771 OR EventCode=4776) earliest={{ earliest }}
+    | bin _time span=30m
+    | stats dc(user) AS distinct_users, count AS attempts, values(user) AS users BY _time, src_ip
+    | where distinct_users >= {{ threshold }}
+    | sort - distinct_users
+  kuma: |
+    SELECT SourceAddress, uniq(DestinationUserName) AS distinct_users, count(*) AS attempts,
+      groupUniqArray(10)(DestinationUserName) AS sample_users
+    FROM `events`
+    WHERE DeviceEventClassID IN ('4625', '4771', '4776')
+    GROUP BY SourceAddress
+    HAVING distinct_users >= {{ threshold }}
+    ORDER BY distinct_users DESC
+    LIMIT {{ kuma_limit }}
+
+- id: success_after_fail
+  title: "Успешный вход после серии неудачных"
+  category: Аутентификация
+  description: "Источник, у которого есть и неудачные (4625), и успешные (4624) входы: возможный удачный подбор."
+  mitre: [T1110, T1078]
+  params:
+    user: {label: "Пользователь (маска *)", default: "*"}
+    threshold: {label: "Мин. неудачных", default: "5", type: int}
+  spl: |
+    index={{ win_index }} (EventCode=4625 OR EventCode=4624) user="{{ user|q }}" earliest={{ earliest }}
+    | stats count(eval(EventCode=4625)) AS failures, count(eval(EventCode=4624)) AS successes,
+        values(Logon_Type) AS logon_types, min(_time) AS first, max(_time) AS last BY src_ip, user, host
+    | where failures >= {{ threshold }} AND successes > 0
+    | convert ctime(first) ctime(last)
+    | sort - failures
+  kuma: |
+    SELECT SourceAddress, DestinationUserName, DestinationHostName,
+      countIf(DeviceEventClassID = '4625') AS failures,
+      countIf(DeviceEventClassID = '4624') AS successes
+    FROM `events`
+    WHERE DeviceEventClassID IN ('4624', '4625') AND DestinationUserName ILIKE '{{ user|like }}'
+    GROUP BY SourceAddress, DestinationUserName, DestinationHostName
+    HAVING failures >= {{ threshold }} AND successes > 0
+    ORDER BY failures DESC
+    LIMIT {{ kuma_limit }}
+
+- id: rdp_logons
+  title: "Входы по RDP (тип 10) и их источники"
+  category: Аутентификация
+  description: "Кто и откуда заходил по RDP. Внешние адреса и нерабочее время требуют внимания."
+  mitre: [T1021.001]
+  params:
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ win_index }} EventCode=4624 Logon_Type=10 host="{{ host|q }}" earliest={{ earliest }}
+    | eval hour=strftime(_time, "%H")
+    | stats count, values(hour) AS hours, min(_time) AS first, max(_time) AS last BY user, src_ip, host
+    | convert ctime(first) ctime(last)
+    | sort - count
+  kuma: |
+    SELECT DestinationUserName, SourceAddress, DestinationHostName, count(*) AS cnt,
+      min(Timestamp) AS first, max(Timestamp) AS last
+    FROM `events`
+    WHERE DeviceEventClassID = '4624' AND DeviceCustomNumber3 = 10   -- тип входа: поле зависит от нормализатора
+      AND DestinationHostName ILIKE '{{ host|like }}'
+    GROUP BY DestinationUserName, SourceAddress, DestinationHostName
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: off_hours_logons
+  title: "Интерактивные входы в нерабочее время"
+  category: Аутентификация
+  description: "Входы типов 2 и 10 вне указанного рабочего интервала и в выходные."
+  mitre: [T1078]
+  params:
+    start_hour: {label: "Начало рабочего дня (час)", default: "8", type: int}
+    end_hour: {label: "Конец рабочего дня (час)", default: "20", type: int}
+  spl: |
+    index={{ win_index }} EventCode=4624 (Logon_Type=2 OR Logon_Type=10) earliest={{ earliest }}
+    | eval hour=tonumber(strftime(_time, "%H")), wday=strftime(_time, "%u")
+    | where hour < {{ start_hour }} OR hour >= {{ end_hour }} OR wday >= 6
+    | table _time host user src_ip Logon_Type
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DestinationHostName, DestinationUserName, SourceAddress
+    FROM `events`
+    WHERE DeviceEventClassID = '4624'
+      AND (toHour(fromUnixTimestamp64Milli(Timestamp)) < {{ start_hour }}
+           OR toHour(fromUnixTimestamp64Milli(Timestamp)) >= {{ end_hour }}
+           OR toDayOfWeek(fromUnixTimestamp64Milli(Timestamp)) >= 6)
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: lockouts
+  title: "Блокировки учётных записей (4740)"
+  category: Аутентификация
+  description: "Какие учётки блокировались и с каких машин шли неверные пароли."
+  mitre: [T1110]
+  params:
+    user: {label: "Пользователь (маска *)", default: "*"}
+  spl: |
+    index={{ win_index }} EventCode=4740 user="{{ user|q }}" earliest={{ earliest }}
+    | stats count, values(Caller_Computer_Name) AS sources, max(_time) AS last BY user
+    | convert ctime(last)
+    | sort - count
+  kuma: |
+    SELECT DestinationUserName, groupUniqArray(SourceHostName) AS sources, count(*) AS cnt
+    FROM `events`
+    WHERE DeviceEventClassID = '4740' AND DestinationUserName ILIKE '{{ user|like }}'
+    GROUP BY DestinationUserName
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: kerberoasting
+  title: "Kerberoasting: TGS с RC4 на много сервисов"
+  category: Аутентификация
+  description: "Пользователь запрашивает билеты с шифрованием 0x17 к множеству SPN за короткое время."
+  mitre: [T1558.003]
+  params:
+    threshold: {label: "Мин. разных сервисов", default: "5", type: int}
+  spl: |
+    index={{ win_index }} EventCode=4769 Ticket_Encryption_Type=0x17 earliest={{ earliest }}
+        NOT Service_Name="krbtgt" NOT Service_Name="*$"
+    | bin _time span=10m
+    | stats dc(Service_Name) AS services, values(Service_Name) AS spns BY _time, user, src_ip
+    | where services >= {{ threshold }}
+  kuma: |
+    SELECT SourceUserName, SourceAddress, uniq(DestinationUserName) AS services,
+      groupUniqArray(20)(DestinationUserName) AS spns
+    FROM `events`
+    WHERE DeviceEventClassID = '4769' AND DeviceCustomString2 = '0x17'   -- тип шифрования: поле зависит от нормализатора
+      AND DestinationUserName NOT ILIKE '%$' AND DestinationUserName != 'krbtgt'
+    GROUP BY SourceUserName, SourceAddress
+    HAVING services >= {{ threshold }}
+    LIMIT {{ kuma_limit }}
+
+- id: account_changes
+  title: "Создание учёток, сброс паролей, добавление в группы"
+  category: Учётные записи
+  description: "4720, 4722, 4724, 4728, 4732, 4756, 4738: изменения учётных записей и групп."
+  mitre: [T1136, T1098]
+  params:
+    user: {label: "Целевая учётка (маска *)", default: "*"}
+  spl: |
+    index={{ win_index }} (EventCode=4720 OR EventCode=4722 OR EventCode=4724 OR EventCode=4728
+        OR EventCode=4732 OR EventCode=4756 OR EventCode=4738) earliest={{ earliest }} user="{{ user|q }}"
+    | table _time host EventCode name src_user user Group_Name
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, DeviceEventClassID, SourceUserName, DestinationUserName,
+      DeviceCustomString1 AS GroupName
+    FROM `events`
+    WHERE DeviceEventClassID IN ('4720', '4722', '4724', '4728', '4732', '4756', '4738')
+      AND DestinationUserName ILIKE '{{ user|like }}'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: privileged_groups
+  title: "Добавление в привилегированные группы"
+  category: Учётные записи
+  description: "Добавление в Domain Admins, Enterprise Admins, Administrators и другие группы с правами."
+  mitre: [T1098]
+  params: {}
+  spl: |
+    index={{ win_index }} (EventCode=4728 OR EventCode=4732 OR EventCode=4756) earliest={{ earliest }}
+        (Group_Name="*Admins*" OR Group_Name="Administrators" OR Group_Name="Администраторы*"
+         OR Group_Name="Remote Desktop Users" OR Group_Name="Backup Operators" OR Group_Name="Account Operators")
+    | table _time host src_user MemberName Group_Name
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, SourceUserName, DestinationUserName, DeviceCustomString1 AS GroupName
+    FROM `events`
+    WHERE DeviceEventClassID IN ('4728', '4732', '4756')
+      AND (DeviceCustomString1 ILIKE '%admin%' OR DeviceCustomString1 ILIKE '%администратор%'
+           OR DeviceCustomString1 ILIKE '%Remote Desktop%' OR DeviceCustomString1 ILIKE '%Operators%')
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: by_user
+  title: "Вся активность пользователя"
+  category: Расследование
+  description: "Входы, процессы и прочие события, связанные с учётной записью."
+  params:
+    user: {label: "Пользователь", default: "ivan.petrov"}
+  spl: |
+    index=* earliest={{ earliest }} (user="{{ user|q }}" OR src_user="{{ user|q }}" OR TargetUserName="{{ user|q }}"
+        OR User="*\\{{ user|q }}")
+    | stats count, values(EventCode) AS event_codes, values(src_ip) AS src_ips, min(_time) AS first,
+        max(_time) AS last BY host, sourcetype
+    | convert ctime(first) ctime(last)
+    | sort - count
+  kuma: |
+    SELECT Timestamp, DeviceProduct, DeviceEventClassID, Name, SourceAddress, DeviceHostName,
+      SourceUserName, DestinationUserName
+    FROM `events`
+    WHERE SourceUserName ILIKE '{{ user|like }}' OR DestinationUserName ILIKE '{{ user|like }}'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}

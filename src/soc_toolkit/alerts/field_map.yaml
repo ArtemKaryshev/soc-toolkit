@@ -1,0 +1,34 @@
+# Сопоставление полей алерта с сущностями отчёта.
+# Сравнивается последний сегмент пути без учёта регистра:
+# {"event": {"src_ip": ...}} совпадёт с ключом src_ip.
+# Покрыты Splunk CIM / ES notable, Kaspersky KUMA, Elastic ECS, Windows/Sysmon, Microsoft Defender, общий JSON.
+# Свои поля можно дописать сюда без изменения кода.
+
+name: [search_name, rule_name, rule.name, alert_name, CorrelationRuleName, signature, title, name, Name, rule,
+       detection_name, ThreatName, AlertName]
+severity: [urgency, severity, Severity, priority, Priority, risk_score, level, event.severity, SeverityName]
+description: [description, Description, message, Message, rule_description, comment]
+time: ["_time", "@timestamp", timestamp, Timestamp, time, event_time, EventTime, TimeCreated, StartTime, EndTime,
+       firstSeen, first_seen, lastSeen, detection_time, created_at, UtcTime, event.created, BeginTime]
+host: [host, hostname, host.name, dest, dest_host, dest_nt_host, src_host, src_nt_host, computer, ComputerName,
+       Computer, DeviceHostName, SourceHostName, DestinationHostName, device_name, DeviceName, Workstation,
+       WorkstationName]
+user: [user, user_name, user.name, username, src_user, dest_user, account, AccountName, TargetUserName,
+       SubjectUserName, SourceUserName, DestinationUserName, User, InitiatingProcessAccountName, recipient]
+src_ip: [src_ip, source_ip, src, source.ip, SourceAddress, IpAddress, client_ip, c_ip, clientip, LocalIP,
+         SourceIp, RemoteIP]
+dest_ip: [dest_ip, destination_ip, dst, dst_ip, destination.ip, DestinationAddress, DestinationIp, dest, RemoteIp]
+ip: [ip, DeviceAddress, ip_address, IPAddress]
+process: [process, process_name, process.name, Image, NewProcessName, DeviceProcessName, SourceProcessName,
+          DestinationProcessName, FileName, InitiatingProcessFileName, app]
+parent_process: [ParentImage, parent_process, parent_process_name, process.parent.name, ParentProcessName,
+                 InitiatingProcessParentFileName]
+command: [CommandLine, command_line, cmdline, process_command_line, process.command_line, ParentCommandLine,
+          ProcessCommandLine, InitiatingProcessCommandLine, DeviceCustomString1]
+file: [file_name, file_path, file.name, file.path, TargetFilename, FilePath, attachment, attachments, FolderPath]
+hash: [hash, Hashes, file_hash, md5, sha1, sha256, SHA256, MD5, SHA1, FileHash, file.hash.sha256]
+url: [url, URL, RequestUrl, request_url, uri, url.full, RemoteUrl]
+domain: [domain, query, QueryName, dns_query, DestinationDnsDomain, url_domain, dns.question.name]
+event_id: [EventCode, EventID, event_id, DeviceEventClassID, event.code, signature_id, ActionType]
+mitre: [mitre_technique, mitre_technique_id, technique, techniques, annotations.mitre_attack, threat.technique.id,
+        AttackTechniques, MitreTechniques]

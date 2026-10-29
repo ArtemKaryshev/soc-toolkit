@@ -1,0 +1,229 @@
+# Справочник Windows EventID для аналитика SOC.
+# Поля: id, log, title, fields (ключевые поля), tips (на что смотреть), mitre.
+# Дописывайте свои события в том же формате.
+
+events:
+  # ---------------------------------------------------------------- Security: вход и учётные данные
+  - {id: 4624, log: Security, title: "Успешный вход в систему", mitre: [T1078, T1021],
+     fields: "TargetUserName, TargetDomainName, LogonType, IpAddress, WorkstationName, LogonProcessName, AuthenticationPackageName, TargetLogonId",
+     tips: "Главное поле LogonType (см. таблицу типов входа). Тип 3 с внешнего IP или тип 10 (RDP) в нерабочее время подозрителен. NTLM вместо Kerberos внутри домена может указывать на Pass-the-Hash. По TargetLogonId связываются все действия сеанса."}
+  - {id: 4625, log: Security, title: "Неудачный вход", mitre: [T1110],
+     fields: "TargetUserName, LogonType, IpAddress, WorkstationName, Status, SubStatus, FailureReason",
+     tips: "SubStatus объясняет причину (таблица NTSTATUS). Много событий с одного IP по одной учётке: подбор; по многим учёткам с одним паролем: password spraying. Обязательно проверьте, был ли после серии 4625 успешный 4624."}
+  - {id: 4634, log: Security, title: "Выход из системы", fields: "TargetUserName, TargetLogonId, LogonType",
+     tips: "Вместе с 4624 по TargetLogonId даёт длительность сеанса."}
+  - {id: 4647, log: Security, title: "Выход, инициированный пользователем", fields: "TargetUserName, TargetLogonId", tips: ""}
+  - {id: 4648, log: Security, title: "Вход с явными учётными данными", mitre: [T1078, T1021],
+     fields: "SubjectUserName, TargetUserName, TargetServerName, ProcessName, IpAddress",
+     tips: "runas, PsExec с -u, подключение к шаре под другой учёткой. Если ProcessName необычный (не lsass/svchost/consent), разберитесь. Частый спутник lateral movement."}
+  - {id: 4672, log: Security, title: "Назначены специальные привилегии новому входу", mitre: [T1078.002],
+     fields: "SubjectUserName, PrivilegeList, SubjectLogonId",
+     tips: "Входы администраторов. Для обычной учётки это уже повод проверить группы. SeDebugPrivilege у неадминистратора подозрителен."}
+  - {id: 4768, log: Security, title: "Запрошен билет Kerberos TGT", mitre: [T1558.004, T1110],
+     fields: "TargetUserName, IpAddress, Status, TicketEncryptionType, PreAuthType",
+     tips: "Status 0x6: нет такого пользователя (перебор имён), 0x18: неверный пароль. PreAuthType 0 означает учётку без предварительной аутентификации, то есть цель AS-REP roasting."}
+  - {id: 4769, log: Security, title: "Запрошен сервисный билет Kerberos (TGS)", mitre: [T1558.003],
+     fields: "TargetUserName, ServiceName, IpAddress, TicketEncryptionType, Status",
+     tips: "TicketEncryptionType 0x17 (RC4) на множество разных ServiceName от одного пользователя за короткое время: Kerberoasting. Исключите krbtgt и учётки компьютеров ($)."}
+  - {id: 4770, log: Security, title: "Продлён сервисный билет Kerberos", fields: "TargetUserName, ServiceName", tips: ""}
+  - {id: 4771, log: Security, title: "Ошибка предварительной аутентификации Kerberos", mitre: [T1110],
+     fields: "TargetUserName, IpAddress, Status",
+     tips: "Status 0x18: неверный пароль. Массовые события: подбор через Kerberos (обходит 4625 на рабочих станциях)."}
+  - {id: 4776, log: Security, title: "Проверка учётных данных NTLM", mitre: [T1110, T1550.002],
+     fields: "TargetUserName, Workstation, Status",
+     tips: "Status 0xC000006A: неверный пароль, 0xC0000064: нет пользователя. На DC видны все NTLM-проверки домена."}
+  - {id: 4778, log: Security, title: "Переподключение к сеансу (RDP)", mitre: [T1021.001],
+     fields: "AccountName, ClientName, ClientAddress", tips: "ClientAddress показывает, откуда подключились."}
+  - {id: 4779, log: Security, title: "Отключение от сеанса (RDP)", fields: "AccountName, ClientName, ClientAddress", tips: ""}
+  - {id: 4740, log: Security, title: "Учётная запись заблокирована", mitre: [T1110],
+     fields: "TargetUserName, CallerComputerName",
+     tips: "Регистрируется на DC. CallerComputerName показывает машину, с которой шли неверные пароли."}
+  - {id: 4964, log: Security, title: "Вход участника особой группы", fields: "TargetUserName, SidList",
+     tips: "Срабатывает для групп из политики Special Groups (например, администраторы домена)."}
+
+  # ---------------------------------------------------------------- Security: учётные записи и группы
+  - {id: 4720, log: Security, title: "Создана учётная запись пользователя", mitre: [T1136.001, T1136.002],
+     fields: "SubjectUserName, TargetUserName, SamAccountName",
+     tips: "Кто создал (Subject) и кого (Target). Создание учётки вне процесса заявок или ночью требует подтверждения."}
+  - {id: 4722, log: Security, title: "Учётная запись включена", fields: "SubjectUserName, TargetUserName", tips: "Включение давно отключённых учёток: способ закрепления."}
+  - {id: 4723, log: Security, title: "Попытка смены собственного пароля", fields: "SubjectUserName, TargetUserName", tips: ""}
+  - {id: 4724, log: Security, title: "Попытка сброса пароля другой учётки", mitre: [T1098],
+     fields: "SubjectUserName, TargetUserName", tips: "Сброс пароля привилегированной учётки не сотрудником helpdesk/IT подозрителен."}
+  - {id: 4725, log: Security, title: "Учётная запись отключена", fields: "SubjectUserName, TargetUserName", tips: ""}
+  - {id: 4726, log: Security, title: "Учётная запись удалена", mitre: [T1531], fields: "SubjectUserName, TargetUserName", tips: "Может быть заметанием следов после использования временной учётки."}
+  - {id: 4728, log: Security, title: "Участник добавлен в глобальную группу безопасности", mitre: [T1098],
+     fields: "SubjectUserName, MemberName, TargetUserName (группа)", tips: "Проверьте группу: Domain Admins, Enterprise Admins, Schema Admins."}
+  - {id: 4729, log: Security, title: "Участник удалён из глобальной группы", fields: "SubjectUserName, MemberName, TargetUserName", tips: ""}
+  - {id: 4732, log: Security, title: "Участник добавлен в локальную группу безопасности", mitre: [T1098],
+     fields: "SubjectUserName, MemberName, TargetUserName (группа)", tips: "Добавление в Administrators или Remote Desktop Users на хосте."}
+  - {id: 4733, log: Security, title: "Участник удалён из локальной группы", fields: "SubjectUserName, MemberName, TargetUserName", tips: ""}
+  - {id: 4738, log: Security, title: "Изменена учётная запись пользователя", mitre: [T1098],
+     fields: "SubjectUserName, TargetUserName, UserAccountControl", tips: "Флаг 'Don't Require Preauth' или 'Password never expires' в UserAccountControl."}
+  - {id: 4741, log: Security, title: "Создана учётная запись компьютера", fields: "SubjectUserName, TargetUserName",
+     tips: "Создание компьютера обычным пользователем (MachineAccountQuota) используется в атаках на RBCD и noPac."}
+  - {id: 4756, log: Security, title: "Участник добавлен в универсальную группу", mitre: [T1098], fields: "SubjectUserName, MemberName, TargetUserName", tips: ""}
+  - {id: 4765, log: Security, title: "SID History добавлен к учётке", mitre: [T1134.005], fields: "SubjectUserName, TargetUserName, SidHistory", tips: "Почти всегда подозрительно вне миграций доменов."}
+  - {id: 4767, log: Security, title: "Учётная запись разблокирована", fields: "SubjectUserName, TargetUserName", tips: ""}
+  - {id: 4781, log: Security, title: "Изменено имя учётной записи", fields: "OldTargetUserName, NewTargetUserName", tips: "Переименование учётки компьютера в имя DC: признак атаки noPac (CVE-2021-42278)."}
+  - {id: 4794, log: Security, title: "Попытка задать пароль DSRM", mitre: [T1098], fields: "SubjectUserName", tips: "Закрепление на контроллере домена."}
+  - {id: 4798, log: Security, title: "Перечислено членство пользователя в локальных группах", mitre: [T1087.001],
+     fields: "SubjectUserName, TargetUserName, CallerProcessName", tips: "Разведка. Важен CallerProcessName: net.exe, powershell.exe и т.п."}
+  - {id: 4799, log: Security, title: "Перечислены участники локальной группы", mitre: [T1069.001],
+     fields: "SubjectUserName, TargetUserName (группа), CallerProcessName", tips: "Например, net localgroup administrators."}
+
+  # ---------------------------------------------------------------- Security: процессы, задачи, службы
+  - {id: 4688, log: Security, title: "Создан новый процесс", mitre: [T1059],
+     fields: "NewProcessName, CommandLine, ParentProcessName, SubjectUserName, TokenElevationType",
+     tips: "CommandLine пишется только при включённой политике 'Include command line in process creation events'. Смотрите связки родитель → потомок: winword.exe → powershell.exe, w3wp.exe → cmd.exe."}
+  - {id: 4689, log: Security, title: "Процесс завершён", fields: "ProcessName, SubjectUserName", tips: ""}
+  - {id: 4697, log: Security, title: "В системе установлена служба", mitre: [T1543.003],
+     fields: "ServiceName, ServiceFileName, ServiceType, ServiceStartType, ServiceAccount", tips: "Аналог System 7045 в журнале Security."}
+  - {id: 4698, log: Security, title: "Создана запланированная задача", mitre: [T1053.005],
+     fields: "SubjectUserName, TaskName, TaskContent", tips: "В TaskContent (XML) ищите Command/Arguments: powershell, скрипты в %TEMP%, %APPDATA%, Public."}
+  - {id: 4699, log: Security, title: "Удалена запланированная задача", mitre: [T1070], fields: "SubjectUserName, TaskName", tips: "Создание и удаление задачи за короткий промежуток: удалённое выполнение (atexec)."}
+  - {id: 4700, log: Security, title: "Включена запланированная задача", fields: "SubjectUserName, TaskName", tips: ""}
+  - {id: 4701, log: Security, title: "Отключена запланированная задача", fields: "SubjectUserName, TaskName", tips: ""}
+  - {id: 4702, log: Security, title: "Изменена запланированная задача", mitre: [T1053.005], fields: "SubjectUserName, TaskName, TaskContentNew", tips: "Подмена команды существующей легитимной задачи."}
+  - {id: 4657, log: Security, title: "Изменено значение реестра", mitre: [T1112], fields: "ObjectName, ObjectValueName, NewValue, ProcessName", tips: "Требует SACL на ключе."}
+  - {id: 4663, log: Security, title: "Попытка доступа к объекту", fields: "ObjectName, AccessMask, ProcessName, SubjectUserName", tips: "Требует аудита объектов. Массовые доступы на запись/удаление: шифровальщик."}
+  - {id: 4670, log: Security, title: "Изменены разрешения объекта", fields: "ObjectName, OldSd, NewSd", tips: ""}
+
+  # ---------------------------------------------------------------- Security: политика, журнал, сеть
+  - {id: 1102, log: Security, title: "Журнал аудита очищен", mitre: [T1070.001], fields: "SubjectUserName",
+     tips: "Сильный индикатор заметания следов. Восстановите хронологию по другим источникам (Sysmon, EDR, SIEM)."}
+  - {id: 4719, log: Security, title: "Изменена политика аудита системы", mitre: [T1562.002], fields: "SubjectUserName, CategoryId, SubcategoryGuid, AuditPolicyChanges", tips: "Отключение аудита перед атакой."}
+  - {id: 4739, log: Security, title: "Изменена политика домена", fields: "SubjectUserName, DomainPolicyChanged", tips: ""}
+  - {id: 4662, log: Security, title: "Выполнена операция над объектом AD", mitre: [T1003.006],
+     fields: "SubjectUserName, ObjectName, Properties, AccessMask",
+     tips: "Properties с GUID 1131f6aa-9c07-11d1-f79f-00c04fc2dcd2 / 1131f6ad-... (DS-Replication-Get-Changes) от не-DC учётки: DCSync."}
+  - {id: 5136, log: Security, title: "Изменён объект службы каталогов", mitre: [T1484.001], fields: "SubjectUserName, ObjectDN, AttributeLDAPDisplayName, AttributeValue", tips: "Изменения GPO, msDS-AllowedToActOnBehalfOfOtherIdentity (RBCD), adminCount."}
+  - {id: 5137, log: Security, title: "Создан объект службы каталогов", fields: "SubjectUserName, ObjectDN, ObjectClass", tips: ""}
+  - {id: 5140, log: Security, title: "Доступ к сетевой папке", mitre: [T1021.002],
+     fields: "SubjectUserName, IpAddress, ShareName", tips: "ADMIN$, C$, IPC$ с рабочей станции на рабочую станцию: lateral movement."}
+  - {id: 5145, log: Security, title: "Проверка доступа к объекту в сетевой папке", mitre: [T1021.002],
+     fields: "SubjectUserName, IpAddress, ShareName, RelativeTargetName", tips: "RelativeTargetName PSEXESVC или svcctl: PsExec. Много событий на разные файлы: копирование данных."}
+  - {id: 5156, log: Security, title: "WFP разрешил подключение", fields: "Application, SourceAddress, DestAddress, DestPort, Direction", tips: "Очень шумное событие, обычно не собирается целиком."}
+  - {id: 5157, log: Security, title: "WFP заблокировал подключение", fields: "Application, SourceAddress, DestAddress, DestPort", tips: ""}
+  - {id: 4946, log: Security, title: "Добавлено правило брандмауэра Windows", mitre: [T1562.004], fields: "RuleName, ApplicationPath", tips: ""}
+  - {id: 4950, log: Security, title: "Изменена настройка брандмауэра Windows", mitre: [T1562.004], fields: "SettingType, SettingValue", tips: ""}
+  - {id: 6416, log: Security, title: "Подключено внешнее устройство", mitre: [T1200, T1052.001], fields: "DeviceDescription, ClassName", tips: "USB-накопители, если это запрещено политикой."}
+
+  # ---------------------------------------------------------------- System
+  - {id: 7045, log: System, title: "Установлена новая служба", mitre: [T1543.003, T1569.002],
+     fields: "ServiceName, ImagePath, ServiceType, StartType, AccountName",
+     tips: "PSEXESVC (PsExec), случайные имена из 7-8 символов, ImagePath с cmd /c, powershell, %COMSPEC% или путём в ADMIN$ (Cobalt Strike, Impacket)."}
+  - {id: 7034, log: System, title: "Служба неожиданно завершилась", fields: "param1 (служба)", tips: "Падение антивируса или EDR."}
+  - {id: 7036, log: System, title: "Служба изменила состояние", fields: "param1, param2", tips: "Остановка служб защиты, резервного копирования, SQL перед шифрованием."}
+  - {id: 7040, log: System, title: "Изменён тип запуска службы", mitre: [T1562.001], fields: "param1, param2, param3", tips: "Перевод службы защиты в 'Отключена'."}
+  - {id: 104, log: System, title: "Журнал событий очищен", mitre: [T1070.001], fields: "SubjectUserName, Channel", tips: "Очистка System, Application и других журналов."}
+  - {id: 1074, log: System, title: "Выключение или перезагрузка, инициированные процессом", fields: "process, reason, user", tips: ""}
+  - {id: 6005, log: System, title: "Служба журнала запущена (загрузка ОС)", fields: "", tips: "Помогает восстановить хронологию перезагрузок."}
+  - {id: 6006, log: System, title: "Служба журнала остановлена (выключение)", fields: "", tips: ""}
+
+  # ---------------------------------------------------------------- PowerShell
+  - {id: 4103, log: "Microsoft-Windows-PowerShell/Operational", title: "Журналирование модулей PowerShell", mitre: [T1059.001],
+     fields: "Payload, ContextInfo", tips: "Показывает вызванные командлеты с параметрами."}
+  - {id: 4104, log: "Microsoft-Windows-PowerShell/Operational", title: "Script Block Logging", mitre: [T1059.001, T1027],
+     fields: "ScriptBlockText, Path, ScriptBlockId",
+     tips: "Полный текст выполненного кода, в том числе после деобфускации. Ищите IEX, DownloadString, FromBase64String, Reflection.Assembly, AMSI bypass, Invoke-Mimikatz. Длинные скрипты разбиты на несколько событий с одним ScriptBlockId."}
+  - {id: 400, log: "Windows PowerShell", title: "Запущен движок PowerShell", mitre: [T1059.001],
+     fields: "HostApplication, EngineVersion", tips: "HostApplication содержит командную строку. EngineVersion 2.0: downgrade-атака для обхода логирования."}
+  - {id: 800, log: "Windows PowerShell", title: "Выполнение конвейера", fields: "HostApplication, CommandLine", tips: ""}
+
+  # ---------------------------------------------------------------- RDP / WinRM / WMI / TaskScheduler
+  - {id: 1149, log: "TerminalServices-RemoteConnectionManager/Operational", title: "RDP: успешная сетевая аутентификация", mitre: [T1021.001],
+     fields: "User, Domain, Source Network Address", tips: "Подключение по RDP до входа. Источник показан даже при NLA."}
+  - {id: 21, log: "TerminalServices-LocalSessionManager/Operational", title: "RDP: вход в сеанс", mitre: [T1021.001], fields: "User, SessionID, Source Network Address", tips: ""}
+  - {id: 24, log: "TerminalServices-LocalSessionManager/Operational", title: "RDP: сеанс отключён", fields: "User, SessionID, Source Network Address", tips: ""}
+  - {id: 25, log: "TerminalServices-LocalSessionManager/Operational", title: "RDP: переподключение к сеансу", fields: "User, SessionID, Source Network Address", tips: ""}
+  - {id: 91, log: "Microsoft-Windows-WinRM/Operational", title: "WinRM: создан сеанс", mitre: [T1021.006], fields: "user, resourceUri", tips: "Удалённый PowerShell (Enter-PSSession, Invoke-Command)."}
+  - {id: 5857, log: "Microsoft-Windows-WMI-Activity/Operational", title: "WMI: загружен провайдер", mitre: [T1047], fields: "ProviderName, HostProcess", tips: ""}
+  - {id: 5861, log: "Microsoft-Windows-WMI-Activity/Operational", title: "WMI: постоянная подписка на событие", mitre: [T1546.003], fields: "Namespace, ESS, Consumer, PossibleCause", tips: "WMI Event Subscription: способ скрытого закрепления."}
+  - {id: 106, log: "Microsoft-Windows-TaskScheduler/Operational", title: "Зарегистрирована задача планировщика", mitre: [T1053.005], fields: "TaskName, UserContext", tips: "Работает, даже если аудит 4698 выключен."}
+  - {id: 200, log: "Microsoft-Windows-TaskScheduler/Operational", title: "Задача запущена (действие)", fields: "TaskName, ActionName", tips: ""}
+  - {id: 141, log: "Microsoft-Windows-TaskScheduler/Operational", title: "Задача удалена", fields: "TaskName, UserName", tips: ""}
+
+  # ---------------------------------------------------------------- Defender
+  - {id: 1116, log: "Microsoft-Windows-Windows Defender/Operational", title: "Defender: обнаружена угроза", fields: "Threat Name, Path, Process Name, Detection User", tips: "Проверьте, была ли угроза удалена (1117) или только обнаружена."}
+  - {id: 1117, log: "Microsoft-Windows-Windows Defender/Operational", title: "Defender: выполнено действие над угрозой", fields: "Threat Name, Action, Path", tips: ""}
+  - {id: 1118, log: "Microsoft-Windows-Windows Defender/Operational", title: "Defender: действие над угрозой не удалось", fields: "Threat Name, Error Description", tips: "Угроза осталась в системе: повод для срочной эскалации."}
+  - {id: 5001, log: "Microsoft-Windows-Windows Defender/Operational", title: "Defender: защита в реальном времени отключена", mitre: [T1562.001], fields: "", tips: "Почти всегда подозрительно, если это не сделала политика."}
+  - {id: 5007, log: "Microsoft-Windows-Windows Defender/Operational", title: "Defender: изменена конфигурация", mitre: [T1562.001], fields: "Old Value, New Value", tips: "Добавление исключений (Exclusions\\Paths) злоумышленником."}
+
+  # ---------------------------------------------------------------- Sysmon
+  - {id: 1, log: Sysmon, title: "Создание процесса", mitre: [T1059],
+     fields: "Image, CommandLine, ParentImage, ParentCommandLine, User, Hashes, IntegrityLevel, OriginalFileName",
+     tips: "OriginalFileName ≠ имя Image: переименованный бинарник. Связки родитель → потомок, процессы из %TEMP%, %APPDATA%, C:\\Users\\Public, C:\\ProgramData."}
+  - {id: 2, log: Sysmon, title: "Изменено время создания файла", mitre: [T1070.006], fields: "Image, TargetFilename, CreationUtcTime, PreviousCreationUtcTime", tips: "Timestomping."}
+  - {id: 3, log: Sysmon, title: "Сетевое подключение", mitre: [T1071],
+     fields: "Image, User, DestinationIp, DestinationPort, DestinationHostname, Initiated",
+     tips: "Сетевые подключения от rundll32, regsvr32, mshta, powershell, notepad и подобных процессов, которые обычно в сеть не ходят."}
+  - {id: 5, log: Sysmon, title: "Процесс завершён", fields: "Image, ProcessGuid", tips: ""}
+  - {id: 6, log: Sysmon, title: "Загружен драйвер", mitre: [T1014, T1068], fields: "ImageLoaded, Signed, Signature", tips: "Неподписанные или уязвимые драйверы (BYOVD)."}
+  - {id: 7, log: Sysmon, title: "Загружен образ (DLL)", mitre: [T1574.002], fields: "Image, ImageLoaded, Signed, Signature", tips: "Неподписанная DLL рядом с подписанным EXE в пользовательской папке: DLL sideloading."}
+  - {id: 8, log: Sysmon, title: "CreateRemoteThread", mitre: [T1055], fields: "SourceImage, TargetImage, StartFunction", tips: "Инъекция кода в другой процесс."}
+  - {id: 9, log: Sysmon, title: "RawAccessRead (прямое чтение диска)", mitre: [T1006], fields: "Image, Device", tips: "Чтение NTDS.dit или SAM в обход блокировок."}
+  - {id: 10, log: Sysmon, title: "Доступ к процессу", mitre: [T1003.001],
+     fields: "SourceImage, TargetImage, GrantedAccess, CallTrace",
+     tips: "TargetImage lsass.exe с GrantedAccess 0x1010, 0x1410, 0x1FFFFF от необычного SourceImage: дамп учётных данных."}
+  - {id: 11, log: Sysmon, title: "Создан файл", fields: "Image, TargetFilename", tips: "Файлы в автозагрузке, исполняемые файлы в %TEMP%, файлы с расширением шифровальщика."}
+  - {id: 12, log: Sysmon, title: "Реестр: создание или удаление ключа", mitre: [T1112], fields: "Image, EventType, TargetObject", tips: ""}
+  - {id: 13, log: Sysmon, title: "Реестр: установлено значение", mitre: [T1547.001, T1112], fields: "Image, TargetObject, Details",
+     tips: "Run/RunOnce, Winlogon\\Shell/Userinit, Image File Execution Options, службы."}
+  - {id: 14, log: Sysmon, title: "Реестр: переименование ключа", fields: "Image, TargetObject, NewName", tips: ""}
+  - {id: 15, log: Sysmon, title: "Создан альтернативный поток (ADS)", mitre: [T1564.004], fields: "Image, TargetFilename, Hash, Contents",
+     tips: "Zone.Identifier с ZoneId=3 и HostUrl: откуда скачан файл."}
+  - {id: 17, log: Sysmon, title: "Создан именованный канал", mitre: [T1570], fields: "Image, PipeName", tips: "Имена по умолчанию Cobalt Strike: \\msagent_*, \\MSSE-*-server, \\postex_*, \\status_*."}
+  - {id: 18, log: Sysmon, title: "Подключение к именованному каналу", fields: "Image, PipeName", tips: ""}
+  - {id: 19, log: Sysmon, title: "WMI: фильтр событий", mitre: [T1546.003], fields: "Operation, Name, Query", tips: ""}
+  - {id: 20, log: Sysmon, title: "WMI: потребитель событий", mitre: [T1546.003], fields: "Name, Type, Destination", tips: ""}
+  - {id: 21, log: Sysmon, title: "WMI: привязка фильтра к потребителю", mitre: [T1546.003], fields: "Consumer, Filter", tips: "Связка 19+20+21: постоянное закрепление через WMI."}
+  - {id: 22, log: Sysmon, title: "DNS-запрос", mitre: [T1071.004], fields: "Image, QueryName, QueryResults, QueryStatus",
+     tips: "Процесс, который резолвил домен. Длинные случайные поддомены: DNS-туннель или DGA."}
+  - {id: 23, log: Sysmon, title: "Удаление файла (с архивом)", mitre: [T1070.004], fields: "Image, TargetFilename, Hashes", tips: ""}
+  - {id: 24, log: Sysmon, title: "Изменение буфера обмена", mitre: [T1115], fields: "Image, Session", tips: ""}
+  - {id: 25, log: Sysmon, title: "Подмена образа процесса", mitre: [T1055.012], fields: "Image, Type", tips: "Process hollowing / herpaderping."}
+  - {id: 26, log: Sysmon, title: "Удаление файла (только запись)", mitre: [T1070.004], fields: "Image, TargetFilename", tips: ""}
+  - {id: 29, log: Sysmon, title: "Обнаружен исполняемый файл", fields: "Image, TargetFilename, Hashes", tips: "Новые PE-файлы на диске."}
+
+logon_types:
+  - {type: 2, name: Interactive, note: "Вход с клавиатуры, консоль"}
+  - {type: 3, name: Network, note: "Доступ к шарам, PsExec, WMI, большинство удалённых операций"}
+  - {type: 4, name: Batch, note: "Запланированные задачи"}
+  - {type: 5, name: Service, note: "Запуск службы"}
+  - {type: 7, name: Unlock, note: "Разблокировка экрана"}
+  - {type: 8, name: NetworkCleartext, note: "Пароль передан открытым текстом (IIS Basic Auth и др.)"}
+  - {type: 9, name: NewCredentials, note: "runas /netonly; также Pass-the-Hash через Mimikatz sekurlsa::pth"}
+  - {type: 10, name: RemoteInteractive, note: "RDP"}
+  - {type: 11, name: CachedInteractive, note: "Вход по кешированным учётным данным без связи с DC"}
+
+ntstatus:
+  - {code: "0xC000006A", meaning: "Неверный пароль"}
+  - {code: "0xC0000064", meaning: "Пользователь не существует"}
+  - {code: "0xC000006D", meaning: "Неверное имя пользователя или данные аутентификации"}
+  - {code: "0xC000006E", meaning: "Ограничение учётной записи (например, пустой пароль)"}
+  - {code: "0xC000006F", meaning: "Вход вне разрешённых часов"}
+  - {code: "0xC0000070", meaning: "Вход с неразрешённой рабочей станции"}
+  - {code: "0xC0000071", meaning: "Срок действия пароля истёк"}
+  - {code: "0xC0000072", meaning: "Учётная запись отключена"}
+  - {code: "0xC0000193", meaning: "Срок действия учётной записи истёк"}
+  - {code: "0xC0000224", meaning: "Требуется смена пароля при следующем входе"}
+  - {code: "0xC0000234", meaning: "Учётная запись заблокирована"}
+  - {code: "0xC000015B", meaning: "Пользователю не разрешён этот тип входа"}
+  - {code: "0xC0000133", meaning: "Рассинхронизация времени с DC"}
+  - {code: "0xC0000413", meaning: "Отказ из-за политики аутентификации (Authentication Firewall)"}
+
+kerberos_errors:
+  - {code: "0x6", meaning: "KDC_ERR_C_PRINCIPAL_UNKNOWN: имя пользователя не найдено"}
+  - {code: "0x12", meaning: "KDC_ERR_CLIENT_REVOKED: учётка отключена, заблокирована или истекла"}
+  - {code: "0x17", meaning: "KDC_ERR_KEY_EXPIRED: истёк срок пароля"}
+  - {code: "0x18", meaning: "KDC_ERR_PREAUTH_FAILED: неверный пароль"}
+  - {code: "0x25", meaning: "KRB_AP_ERR_SKEW: расхождение времени"}
+
+ticket_encryption:
+  - {code: "0x1", meaning: "DES-CBC-CRC (устарело, подозрительно)"}
+  - {code: "0x3", meaning: "DES-CBC-MD5 (устарело, подозрительно)"}
+  - {code: "0x11", meaning: "AES128-CTS-HMAC-SHA1-96"}
+  - {code: "0x12", meaning: "AES256-CTS-HMAC-SHA1-96 (норма для современных доменов)"}
+  - {code: "0x17", meaning: "RC4-HMAC: в TGS-запросах признак Kerberoasting"}
+  - {code: "0x18", meaning: "RC4-HMAC-EXP"}

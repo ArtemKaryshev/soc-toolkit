@@ -1,0 +1,30 @@
+{
+  "rule_name": "Phishing email delivered: credential harvesting link clicked",
+  "severity": "high",
+  "_time": "2026-10-28T11:04:37+03:00",
+  "description": "Письмо с поддельного домена Microsoft доставлено пользователю, через 2 минуты с его хоста зафиксирован переход по ссылке",
+  "sender": "no-reply@micros0ft-helpdesk.com",
+  "recipient": "ivan.petrov@corp.local",
+  "subject": "Срочно: ваш пароль истекает сегодня",
+  "attachment": "Invoice_2026_10.docm",
+  "spf": "fail",
+  "dmarc": "fail",
+  "src_ip": "185.220.101.45",
+  "events": [
+    {
+      "time": "2026-10-28T11:02:13+03:00",
+      "EventID": "mail_delivered",
+      "sender": "no-reply@micros0ft-helpdesk.com",
+      "recipient": "ivan.petrov@corp.local",
+      "src_ip": "185.220.101.45"
+    },
+    {
+      "time": "2026-10-28T11:04:37+03:00",
+      "EventID": "proxy_allowed",
+      "host": "WS-ACC-017",
+      "user": "CORP\\ivan.petrov",
+      "url": "https://login-micros0ft-helpdesk.com/owa/auth.php?u=ivan.petrov",
+      "dest_ip": "45.33.32.156"
+    }
+  ]
+}

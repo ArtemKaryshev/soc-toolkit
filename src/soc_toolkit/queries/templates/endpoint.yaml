@@ -1,0 +1,307 @@
+# Шаблоны запросов: процессы, закрепление, обход защиты (Sysmon / Security 4688 / System).
+
+- id: cmdline
+  title: "Процессы с подстрокой в командной строке"
+  category: Процессы
+  description: "Создание процессов (Sysmon 1 / Security 4688) с указанной подстрокой."
+  mitre: [T1059]
+  params:
+    keyword: {label: "Подстрока", default: "-enc"}
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=1 host="{{ host|q }}" earliest={{ earliest }}
+        CommandLine="*{{ keyword|q }}*"
+    | table _time host User ParentImage Image CommandLine Hashes
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, SourceUserName, SourceProcessName, DestinationProcessName,
+      DeviceCustomString1 AS CommandLine
+    FROM `events`
+    WHERE DeviceEventClassID IN ('1', '4688') AND DeviceCustomString1 ILIKE '%{{ keyword|like }}%'
+      AND DeviceHostName ILIKE '{{ host|like }}'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: encoded_powershell
+  title: "Закодированный PowerShell (-enc)"
+  category: Процессы
+  description: "PowerShell, запущенный с -EncodedCommand / -enc / -e. Раскодировать можно на вкладке IOC."
+  mitre: [T1059.001, T1027]
+  params:
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=1 host="{{ host|q }}" earliest={{ earliest }}
+        (Image="*\\powershell.exe" OR Image="*\\pwsh.exe")
+    | regex CommandLine="(?i)\s-(e|en|enc|enco|encodedcommand)\s"
+    | table _time host User ParentImage CommandLine
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, SourceUserName, SourceProcessName, DeviceCustomString1 AS CommandLine
+    FROM `events`
+    WHERE DeviceEventClassID IN ('1', '4688') AND DeviceHostName ILIKE '{{ host|like }}'
+      AND (DestinationProcessName ILIKE '%powershell.exe' OR DestinationProcessName ILIKE '%pwsh.exe')
+      AND match(lower(DeviceCustomString1), '\\s-(e|en|enc|enco|encodedcommand)\\s')
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: office_child
+  title: "Офисные приложения запускают оболочки"
+  category: Процессы
+  description: "WINWORD/EXCEL/OUTLOOK/POWERPNT порождают cmd, powershell, wscript, mshta и т.п.: типичный фишинг."
+  mitre: [T1204.002, T1566.001]
+  params: {}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=1 earliest={{ earliest }}
+        (ParentImage="*\\winword.exe" OR ParentImage="*\\excel.exe" OR ParentImage="*\\powerpnt.exe"
+         OR ParentImage="*\\outlook.exe" OR ParentImage="*\\onenote.exe")
+        (Image="*\\cmd.exe" OR Image="*\\powershell.exe" OR Image="*\\pwsh.exe" OR Image="*\\wscript.exe"
+         OR Image="*\\cscript.exe" OR Image="*\\mshta.exe" OR Image="*\\rundll32.exe" OR Image="*\\regsvr32.exe"
+         OR Image="*\\certutil.exe" OR Image="*\\bitsadmin.exe")
+    | table _time host User ParentImage Image CommandLine
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, SourceUserName, SourceProcessName, DestinationProcessName,
+      DeviceCustomString1 AS CommandLine
+    FROM `events`
+    WHERE DeviceEventClassID IN ('1', '4688')
+      AND match(lower(SourceProcessName), '(winword|excel|powerpnt|outlook|onenote)\\.exe$')
+      AND match(lower(DestinationProcessName), '(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32|certutil|bitsadmin)\\.exe$')
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: process_by_name
+  title: "Запуски процесса и его родители"
+  category: Процессы
+  description: "Кто и откуда запускал процесс: удобно для разбора LOLBAS."
+  mitre: [T1218]
+  params:
+    process: {label: "Имя процесса", default: "certutil.exe"}
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=1 host="{{ host|q }}" earliest={{ earliest }}
+        Image="*\\{{ process|q }}"
+    | stats count, values(CommandLine) AS cmd, values(User) AS users, min(_time) AS first, max(_time) AS last
+        BY host, ParentImage
+    | convert ctime(first) ctime(last)
+    | sort - count
+  kuma: |
+    SELECT DeviceHostName, SourceProcessName AS ParentProcess, count(*) AS cnt,
+      groupUniqArray(DeviceCustomString1) AS cmd
+    FROM `events`
+    WHERE DeviceEventClassID IN ('1', '4688') AND DestinationProcessName ILIKE '%{{ process|like }}'
+      AND DeviceHostName ILIKE '{{ host|like }}'
+    GROUP BY DeviceHostName, ParentProcess
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: suspicious_paths
+  title: "Запуск исполняемых файлов из пользовательских и временных папок"
+  category: Процессы
+  description: "Процессы из %TEMP%, %APPDATA%, Downloads, C:\\Users\\Public, C:\\ProgramData."
+  mitre: [T1204.002, T1036]
+  params:
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=1 host="{{ host|q }}" earliest={{ earliest }}
+        (Image="*\\AppData\\Local\\Temp\\*" OR Image="*\\AppData\\Roaming\\*" OR Image="*\\Downloads\\*"
+         OR Image="C:\\Users\\Public\\*" OR Image="C:\\ProgramData\\*" OR Image="C:\\Windows\\Temp\\*")
+    | stats count, values(CommandLine) AS cmd, values(Hashes) AS hashes BY host, User, Image, ParentImage
+    | sort - count
+  kuma: |
+    SELECT DeviceHostName, SourceUserName, DestinationProcessName, SourceProcessName, count(*) AS cnt
+    FROM `events`
+    WHERE DeviceEventClassID IN ('1', '4688') AND DeviceHostName ILIKE '{{ host|like }}'
+      AND match(lower(DestinationProcessName),
+                '\\\\(appdata\\\\local\\\\temp|appdata\\\\roaming|downloads|users\\\\public|programdata|windows\\\\temp)\\\\')
+    GROUP BY DeviceHostName, SourceUserName, DestinationProcessName, SourceProcessName
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: lsass_access
+  title: "Доступ к памяти LSASS (Sysmon 10)"
+  category: Учётные данные
+  description: "Процессы, открывшие lsass.exe с правами чтения памяти: возможный дамп учётных данных."
+  mitre: [T1003.001]
+  params: {}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=10 TargetImage="*\\lsass.exe" earliest={{ earliest }}
+        (GrantedAccess=0x1010 OR GrantedAccess=0x1410 OR GrantedAccess=0x1438 OR GrantedAccess=0x143a
+         OR GrantedAccess=0x1fffff)
+        NOT SourceImage IN ("*\\MsMpEng.exe", "*\\csrss.exe", "*\\wininit.exe", "*\\svchost.exe")
+    | stats count, values(GrantedAccess) AS access BY host, SourceImage, SourceUser
+    | sort - count
+  kuma: |
+    SELECT DeviceHostName, SourceProcessName, SourceUserName, groupUniqArray(DeviceCustomString2) AS access,
+      count(*) AS cnt
+    FROM `events`
+    WHERE DeviceEventClassID = '10' AND DestinationProcessName ILIKE '%lsass.exe'
+      AND NOT match(lower(SourceProcessName), '(msmpeng|csrss|wininit|svchost)\\.exe$')
+    GROUP BY DeviceHostName, SourceProcessName, SourceUserName
+    ORDER BY cnt DESC
+    LIMIT {{ kuma_limit }}
+
+- id: new_service
+  title: "Установка новой службы (7045 / 4697)"
+  category: Закрепление
+  description: "Новые службы используются для закрепления и удалённого выполнения (PsExec, Impacket, Cobalt Strike)."
+  mitre: [T1543.003, T1569.002]
+  params:
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ win_index }} (EventCode=7045 OR EventCode=4697) host="{{ host|q }}" earliest={{ earliest }}
+    | eval suspicious=if(match(lower(Service_File_Name), "cmd|powershell|comspec|\\\\admin\$|\\\\temp\\\\|\\\\users\\\\"), "yes", "no")
+    | table _time host Service_Name Service_File_Name Service_Account suspicious
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, DeviceEventClassID, Name, FileName, DeviceCustomString1, Message
+    FROM `events`
+    WHERE DeviceEventClassID IN ('7045', '4697') AND DeviceHostName ILIKE '{{ host|like }}'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: scheduled_task
+  title: "Создание запланированных задач (4698 / TaskScheduler 106)"
+  category: Закрепление
+  description: "Новые задачи планировщика: частый способ закрепления."
+  mitre: [T1053.005]
+  params:
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ win_index }} (EventCode=4698 OR EventCode=4702) host="{{ host|q }}" earliest={{ earliest }}
+    | rex field=Task_Content "<Command>(?<task_command>[^<]+)</Command>"
+    | rex field=Task_Content "<Arguments>(?<task_args>[^<]+)</Arguments>"
+    | table _time host user Task_Name task_command task_args
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, SourceUserName, DeviceCustomString1 AS TaskName, Message
+    FROM `events`
+    WHERE DeviceEventClassID IN ('4698', '4702', '106') AND DeviceHostName ILIKE '{{ host|like }}'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: run_keys
+  title: "Автозапуск через реестр (Sysmon 13)"
+  category: Закрепление
+  description: "Запись в Run/RunOnce, Winlogon, IFEO и другие ключи автозапуска."
+  mitre: [T1547.001, T1546.012]
+  params:
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ sysmon_index }} sourcetype="{{ sysmon_sourcetype }}" EventCode=13 host="{{ host|q }}" earliest={{ earliest }}
+        (TargetObject="*\\CurrentVersion\\Run*" OR TargetObject="*\\Winlogon\\*"
+         OR TargetObject="*\\Image File Execution Options\\*" OR TargetObject="*\\Explorer\\Shell Folders*")
+    | table _time host User Image TargetObject Details
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, SourceUserName, SourceProcessName, DeviceCustomString1 AS TargetObject,
+      DeviceCustomString2 AS Details
+    FROM `events`
+    WHERE DeviceEventClassID = '13' AND DeviceHostName ILIKE '{{ host|like }}'
+      AND match(lower(DeviceCustomString1), 'currentversion\\\\run|winlogon|image file execution options')
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: log_cleared
+  title: "Очистка журналов (1102 / 104)"
+  category: Обход защиты
+  description: "Удаление журналов безопасности или системы: сильный признак заметания следов."
+  mitre: [T1070.001]
+  params:
+    host: {label: "Хост (маска *)", default: "*"}
+  spl: |
+    index={{ win_index }} (EventCode=1102 OR EventCode=104) host="{{ host|q }}" earliest={{ earliest }}
+    | table _time host EventCode user LogName
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, DeviceEventClassID, SourceUserName, Message
+    FROM `events`
+    WHERE DeviceEventClassID IN ('1102', '104') AND DeviceHostName ILIKE '{{ host|like }}'
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: defender_tamper
+  title: "Отключение или настройка Defender"
+  category: Обход защиты
+  description: "Отключение защиты в реальном времени (5001), изменение конфигурации и исключений (5007), Set-MpPreference."
+  mitre: [T1562.001]
+  params: {}
+  spl: |
+    (index={{ win_index }} (EventCode=5001 OR EventCode=5007 OR EventCode=5010 OR EventCode=5012))
+    OR (index={{ sysmon_index }} EventCode=1 CommandLine="*Set-MpPreference*"
+        (CommandLine="*Disable*" OR CommandLine="*Exclusion*"))
+    earliest={{ earliest }}
+    | table _time host EventCode user CommandLine Message
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, DeviceEventClassID, SourceUserName, DeviceCustomString1, Message
+    FROM `events`
+    WHERE DeviceEventClassID IN ('5001', '5007', '5010', '5012')
+       OR (DeviceEventClassID IN ('1', '4688') AND DeviceCustomString1 ILIKE '%Set-MpPreference%'
+           AND (DeviceCustomString1 ILIKE '%Disable%' OR DeviceCustomString1 ILIKE '%Exclusion%'))
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: shadow_copy_delete
+  title: "Удаление теневых копий и отключение восстановления"
+  category: Воздействие
+  description: "vssadmin/wmic shadowcopy delete, bcdedit, wbadmin: подготовка к шифрованию."
+  mitre: [T1490]
+  params: {}
+  spl: |
+    index={{ sysmon_index }} EventCode=1 earliest={{ earliest }}
+        ((Image="*\\vssadmin.exe" CommandLine="*delete*") OR (Image="*\\wmic.exe" CommandLine="*shadowcopy*delete*")
+         OR (Image="*\\bcdedit.exe" CommandLine="*recoveryenabled*") OR (Image="*\\wbadmin.exe" CommandLine="*delete*"))
+    | table _time host User ParentImage CommandLine
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, SourceUserName, SourceProcessName, DeviceCustomString1 AS CommandLine
+    FROM `events`
+    WHERE DeviceEventClassID IN ('1', '4688')
+      AND match(lower(DeviceCustomString1), 'vssadmin.+delete|shadowcopy.+delete|recoveryenabled|wbadmin.+delete')
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: psexec_like
+  title: "Удалённое выполнение: PsExec, SMB-шары, WMI"
+  category: Горизонтальное перемещение
+  description: "Доступ к ADMIN$/C$, служба PSEXESVC, wmiprvse порождает оболочки."
+  mitre: [T1021.002, T1047, T1569.002]
+  params: {}
+  spl: |
+    (index={{ win_index }} EventCode=5145 (Share_Name="*ADMIN$" OR Share_Name="*C$")
+       (Relative_Target_Name="*PSEXESVC*" OR Relative_Target_Name="*.exe" OR Relative_Target_Name="svcctl"))
+    OR (index={{ win_index }} EventCode=7045 Service_Name="PSEXESVC")
+    OR (index={{ sysmon_index }} EventCode=1 ParentImage="*\\wmiprvse.exe"
+        (Image="*\\cmd.exe" OR Image="*\\powershell.exe"))
+    earliest={{ earliest }}
+    | table _time host EventCode src_ip user Share_Name Relative_Target_Name Service_Name CommandLine
+    | sort - _time
+  kuma: |
+    SELECT Timestamp, DeviceHostName, DeviceEventClassID, SourceAddress, SourceUserName,
+      DeviceCustomString1, DeviceCustomString2
+    FROM `events`
+    WHERE (DeviceEventClassID = '5145' AND match(DeviceCustomString1, '(?i)(ADMIN|C)\\$'))
+       OR (DeviceEventClassID = '7045' AND Name ILIKE '%PSEXESVC%')
+       OR (DeviceEventClassID = '1' AND SourceProcessName ILIKE '%wmiprvse.exe'
+           AND match(lower(DestinationProcessName), '(cmd|powershell)\\.exe$'))
+    ORDER BY Timestamp DESC
+    LIMIT {{ kuma_limit }}
+
+- id: by_host
+  title: "Хронология событий на хосте"
+  category: Расследование
+  description: "Все события с хоста: что происходило до и после алерта."
+  params:
+    host: {label: "Хост", default: "WS-ACC-017"}
+  spl: |
+    index=* host="{{ host|q }}" earliest={{ earliest }}
+    | eval what=coalesce(CommandLine, Image, name, signature, EventCode)
+    | table _time sourcetype EventCode user what src_ip dest_ip
+    | sort _time
+  kuma: |
+    SELECT Timestamp, DeviceProduct, DeviceEventClassID, Name, SourceUserName, DestinationUserName,
+      SourceProcessName, DeviceCustomString1, SourceAddress, DestinationAddress
+    FROM `events`
+    WHERE DeviceHostName ILIKE '{{ host|like }}' OR DestinationHostName ILIKE '{{ host|like }}'
+    ORDER BY Timestamp ASC
+    LIMIT {{ kuma_limit }}

@@ -1,0 +1,122 @@
+# Типовые рекомендации по категориям алертов. Редактируются под процессы вашего SOC.
+categories:
+  generic:
+    title: {ru: "Общая", en: "Generic"}
+    ru:
+      - Изолировать затронутый хост при подтверждённой вредоносной активности
+      - Заблокировать внешние индикаторы на периметре (МСЭ, прокси, DNS)
+      - Сбросить учётные данные затронутых пользователей
+      - Продолжить мониторинг связанных событий в течение 24 часов
+    en:
+      - Isolate the affected host if malicious activity is confirmed
+      - Block external indicators at the perimeter (firewall, proxy, DNS)
+      - Reset credentials of affected users
+      - Continue monitoring related events for 24 hours
+  phishing:
+    title: {ru: "Фишинг", en: "Phishing"}
+    ru:
+      - Удалить письмо из всех ящиков получателей
+      - Заблокировать адрес и домен отправителя на почтовом шлюзе
+      - Заблокировать URL и домены из письма на прокси и DNS
+      - Сбросить пароль и завершить сессии пользователя, если он вводил учётные данные
+      - Проверить, открывались ли вложения и переходил ли пользователь по ссылке
+      - Уведомить пользователей о фишинговой рассылке
+    en:
+      - Purge the email from all recipient mailboxes
+      - Block the sender address and domain on the mail gateway
+      - Block URLs and domains from the email on the proxy and DNS
+      - Reset the password and revoke sessions if the user entered credentials
+      - Check whether attachments were opened or the link was clicked
+      - Notify users about the phishing campaign
+  malware:
+    title: {ru: "Вредоносное ПО", en: "Malware"}
+    ru:
+      - Изолировать хост от сети средствами EDR
+      - Заблокировать хэши файлов в EDR/антивирусе
+      - Заблокировать C2-адреса и домены на МСЭ и прокси
+      - Собрать артефакты (дамп памяти, автозагрузка, задачи планировщика, службы)
+      - Проверить наличие тех же индикаторов на других хостах
+      - После анализа переустановить систему или выполнить полное лечение
+    en:
+      - Isolate the host from the network via EDR
+      - Block file hashes in EDR/antivirus
+      - Block C2 addresses and domains on firewall and proxy
+      - Collect artifacts (memory dump, autoruns, scheduled tasks, services)
+      - Hunt for the same indicators on other hosts
+      - Reimage or fully remediate the host after analysis
+  bruteforce:
+    title: {ru: "Подбор пароля", en: "Brute force"}
+    ru:
+      - Заблокировать IP-источник на МСЭ/VPN
+      - Проверить, был ли успешный вход после серии неудачных
+      - Сбросить пароль и включить MFA для затронутой учётной записи
+      - Проверить политику блокировки учётных записей
+      - Ограничить доступ к сервису (RDP/VPN) по белому списку адресов
+    en:
+      - Block the source IP on firewall/VPN
+      - Check for successful logons after the failed attempts
+      - Reset the password and enforce MFA for the affected account
+      - Review the account lockout policy
+      - Restrict service access (RDP/VPN) to an allowlist of addresses
+  lateral:
+    title: {ru: "Горизонтальное перемещение", en: "Lateral movement"}
+    ru:
+      - Изолировать все затронутые хосты
+      - Отключить или сбросить скомпрометированные учётные записи
+      - Проверить использование PsExec, WMI, WinRM и RDP за период инцидента
+      - Сверить действия с администраторами
+      - Проверить контроллеры домена на признаки компрометации
+    en:
+      - Isolate all affected hosts
+      - Disable or reset compromised accounts
+      - Review PsExec, WMI, WinRM and RDP usage during the incident window
+      - Confirm the activity with administrators
+      - Check domain controllers for signs of compromise
+  credential_access:
+    title: {ru: "Кража учётных данных", en: "Credential access"}
+    ru:
+      - Изолировать хост
+      - Сбросить пароли всех учётных записей, входивших на хост
+      - При подозрении на компрометацию домена дважды сбросить пароль krbtgt
+      - Включить Credential Guard и защиту LSASS (RunAsPPL)
+    en:
+      - Isolate the host
+      - Reset passwords for all accounts that logged on to the host
+      - If domain compromise is suspected, reset the krbtgt password twice
+      - Enable Credential Guard and LSASS protection (RunAsPPL)
+  exfiltration:
+    title: {ru: "Утечка данных", en: "Exfiltration"}
+    ru:
+      - Заблокировать адрес назначения
+      - Оценить объём и состав переданных данных
+      - Изолировать хост-источник
+      - Уведомить ответственного за защиту данных и юристов
+    en:
+      - Block the destination address
+      - Estimate the volume and content of transferred data
+      - Isolate the source host
+      - Notify the data protection officer and legal
+  ransomware:
+    title: {ru: "Шифровальщик", en: "Ransomware"}
+    ru:
+      - Немедленно изолировать затронутые хосты и сегменты сети
+      - Отключить сетевые шары, к которым имел доступ заражённый хост
+      - Проверить целостность и доступность резервных копий
+      - Эскалировать на руководителя SOC и группу реагирования
+      - Сохранить записку о выкупе и образцы зашифрованных файлов
+    en:
+      - Immediately isolate affected hosts and network segments
+      - Disconnect network shares reachable from the infected host
+      - Verify integrity and availability of backups
+      - Escalate to the SOC lead and incident response team
+      - Preserve the ransom note and encrypted file samples
+  fp:
+    title: {ru: "Ложное срабатывание", en: "False positive"}
+    ru:
+      - Действий по реагированию не требуется
+      - Рассмотреть настройку правила или исключение для подтверждённой легитимной активности
+      - Задокументировать причину ложного срабатывания
+    en:
+      - No response actions required
+      - Consider tuning the rule or adding an exclusion for the confirmed legitimate activity
+      - Document the false positive reason

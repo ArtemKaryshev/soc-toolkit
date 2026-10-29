@@ -1,0 +1,92 @@
+{# Every block tag is on its own line: trim_blocks removes its newline. #}
+# Alert Report{{ (" #" ~ ctx.case_id) if ctx.case_id else "" }}
+
+| | |
+|---|---|
+| **Alert** | {{ a.name or "not specified" }} |
+| **Severity** | {{ a.severity or "not specified" }} |
+| **Source** | {{ a.source_format }} |
+| **Verdict** | **{{ "True Positive" if ctx.is_tp else "False Positive" }}** |
+| **Category** | {{ ctx.category_title }} |
+| **Escalated** | {{ "yes" if ctx.escalate else "no" }} |
+{% if ctx.analyst %}
+| **Analyst** | {{ ctx.analyst }} |
+{% endif %}
+| **Report date** | {{ ctx.created }} |
+
+## Time of activity
+
+{% if a.times %}
+- First event: {{ a.first_seen }}
+- Last event: {{ a.last_seen }}
+{% else %}
+- no data
+{% endif %}
+{% if a.timeline %}
+
+**Timeline:**
+
+| Time | Event |
+|---|---|
+{% for e in a.timeline %}
+| {{ e.time }} | {{ e.summary | replace("|", "\\|") }} |
+{% endfor %}
+{% endif %}
+
+## List of Affected Entities
+
+{% for label, values in ctx.entities %}
+- **{{ label }}:** {{ values }}
+{% else %}
+- no data
+{% endfor %}
+{% if a.commands %}
+
+**Command lines:**
+
+{% for c in a.commands %}
+```
+{{ c }}
+```
+{% endfor %}
+{% endif %}
+
+## Reason for Classifying as {{ "True Positive" if ctx.is_tp else "False Positive" }}
+
+{{ ctx.reason or "not specified" }}
+
+## Reason for Escalating the Alert
+
+{{ (ctx.escalation_reason or "not specified") if ctx.escalate else "No escalation required." }}
+
+## Recommended Remediation Actions
+
+{% for r in ctx.remediation %}
+- {{ r }}
+{% else %}
+- none
+{% endfor %}
+
+## List of Attack Indicators
+
+{% for i in ctx.indicators %}
+- {{ i.type }}: `{{ i.value }}`{{ (" — " ~ i.verdict) if i.verdict else "" }}
+{% else %}
+- no external indicators found
+{% endfor %}
+{% if ctx.mitre %}
+
+## MITRE ATT&CK
+
+| Technique | Name | Basis |
+|---|---|---|
+{% for m in ctx.mitre %}
+| [{{ m.id }}]({{ m.url }}) | {{ m.name }} | {{ m.reason }} |
+{% endfor %}
+{% endif %}
+{% if ctx.notes %}
+
+## Analyst notes
+
+{{ ctx.notes }}
+{% endif %}

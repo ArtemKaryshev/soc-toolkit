@@ -1,0 +1,92 @@
+{# Каждый блочный тег стоит на отдельной строке: trim_blocks убирает её перевод строки. #}
+# Отчёт по алерту{{ (" №" ~ ctx.case_id) if ctx.case_id else "" }}
+
+| | |
+|---|---|
+| **Алерт** | {{ a.name or "не указано" }} |
+| **Критичность** | {{ a.severity or "не указана" }} |
+| **Источник** | {{ a.source_format }} |
+| **Вердикт** | **{{ "True Positive" if ctx.is_tp else "False Positive" }}** |
+| **Категория** | {{ ctx.category_title }} |
+| **Эскалация** | {{ "да" if ctx.escalate else "нет" }} |
+{% if ctx.analyst %}
+| **Аналитик** | {{ ctx.analyst }} |
+{% endif %}
+| **Дата отчёта** | {{ ctx.created }} |
+
+## Time of activity (время активности)
+
+{% if a.times %}
+- Первое событие: {{ a.first_seen }}
+- Последнее событие: {{ a.last_seen }}
+{% else %}
+- нет данных
+{% endif %}
+{% if a.timeline %}
+
+**Хронология событий:**
+
+| Время | Событие |
+|---|---|
+{% for e in a.timeline %}
+| {{ e.time }} | {{ e.summary | replace("|", "\\|") }} |
+{% endfor %}
+{% endif %}
+
+## List of Affected Entities (затронутые объекты)
+
+{% for label, values in ctx.entities %}
+- **{{ label }}:** {{ values }}
+{% else %}
+- нет данных
+{% endfor %}
+{% if a.commands %}
+
+**Командные строки:**
+
+{% for c in a.commands %}
+```
+{{ c }}
+```
+{% endfor %}
+{% endif %}
+
+## Reason for Classifying as {{ "True Positive" if ctx.is_tp else "False Positive" }} (обоснование)
+
+{{ ctx.reason or "не указано" }}
+
+## Reason for Escalating the Alert (причина эскалации)
+
+{{ (ctx.escalation_reason or "не указано") if ctx.escalate else "Эскалация не требуется." }}
+
+## Recommended Remediation Actions (рекомендации)
+
+{% for r in ctx.remediation %}
+- {{ r }}
+{% else %}
+- нет
+{% endfor %}
+
+## List of Attack Indicators (индикаторы атаки)
+
+{% for i in ctx.indicators %}
+- {{ i.type }}: `{{ i.value }}`{{ (" — " ~ i.verdict) if i.verdict else "" }}
+{% else %}
+- внешние индикаторы не обнаружены
+{% endfor %}
+{% if ctx.mitre %}
+
+## MITRE ATT&CK
+
+| Техника | Название | Основание |
+|---|---|---|
+{% for m in ctx.mitre %}
+| [{{ m.id }}]({{ m.url }}) | {{ m.name }} | {{ m.reason }} |
+{% endfor %}
+{% endif %}
+{% if ctx.notes %}
+
+## Заметки аналитика
+
+{{ ctx.notes }}
+{% endif %}
