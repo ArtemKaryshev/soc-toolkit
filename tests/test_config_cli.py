@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from soc_toolkit.cli import app
@@ -64,3 +65,24 @@ def test_cli_rep_requires_policy():
 def test_cli_ref():
     assert "Kerberoasting" in runner.invoke(app, ["ref", "event", "4769"]).stdout
     assert "T1003.001" in runner.invoke(app, ["ref", "mitre", "lsass"]).stdout
+
+
+def test_broken_config_explained(tmp_path):
+    from soc_toolkit.config import ConfigError, load_settings
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[api_keys]\nvirustotal = ""\nabuseipdb = "abc\n', encoding="utf-8")
+    with pytest.raises(ConfigError) as e:
+        load_settings(cfg)
+    text = str(e.value)
+    assert "Строка 3, параметр «abuseipdb»" in text and "закрывающей кавычки" in text
+    assert "abc" not in text
+
+
+def test_broken_config_cli(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('log_level = "INFO\n', encoding="utf-8")
+    monkeypatch.setenv("SOC_TOOLKIT_CONFIG", str(cfg))
+    result = CliRunner().invoke(app, ["info"])
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output

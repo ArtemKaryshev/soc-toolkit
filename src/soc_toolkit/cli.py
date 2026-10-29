@@ -24,7 +24,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from . import __version__
-from .config import PACKAGE_DIR, Settings, app_home, load_settings, setup_logging
+from .config import PACKAGE_DIR, ConfigError, Settings, app_home, load_settings, setup_logging
 
 app = typer.Typer(help="SOC Toolkit: рабочее место аналитика SOC L1.", no_args_is_help=True,
                   rich_markup_mode="rich")
@@ -44,7 +44,11 @@ err = Console(stderr=True)
 
 
 def _settings() -> Settings:
-    s = load_settings()
+    try:
+        s = load_settings()
+    except ConfigError as e:
+        err.print(str(e), style="red", markup=False, highlight=False)
+        raise typer.Exit(2) from e
     setup_logging(s)
     return s
 

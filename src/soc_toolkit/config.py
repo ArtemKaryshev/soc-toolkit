@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -130,12 +131,41 @@ def _fill(cls: type, raw: dict[str, Any]) -> Any:
     return obj
 
 
+class ConfigError(ValueError):
+    """Ошибка в config.toml с понятным объяснением, где и что исправить."""
+
+
+def _explain(path: Path, err: tomllib.TOMLDecodeError) -> str:
+    # lineno есть только с Python 3.14, раньше номер строки есть лишь в тексте ошибки
+    lineno = getattr(err, "lineno", None)
+    if not lineno and (m := re.search(r"at line (\d+)", str(err))):
+        lineno = int(m.group(1))
+    msg = f"Ошибка в файле {path}: {err}."
+    if lineno:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if 0 < lineno <= len(lines):
+            # значение не показываем: там может быть API-ключ
+            name = lines[lineno - 1].split("=", 1)[0].strip()
+            msg += f"\nСтрока {lineno}, параметр «{name}»."
+    text = str(err).lower()
+    if "illegal character '\\n'" in text or "unterminated" in text:
+        msg += ("\nПохоже, у значения нет закрывающей кавычки или ключ вставился с переносом строки. "
+                'Должно быть так: abuseipdb = "ваш_ключ" (обе кавычки на одной строке).')
+    elif "escape" in text:
+        msg += ("\nПути Windows пишите в одинарных кавычках: 'C:\\Users\\...' "
+                "или с прямыми слэшами: \"C:/Users/...\".")
+    return msg + "\nИсправьте файл и перезапустите приложение."
+
+
 def load_settings(path: Path | None = None) -> Settings:
     path = path or find_config()
     raw: dict[str, Any] = {}
     if path and path.is_file():
-        with path.open("rb") as f:
-            raw = tomllib.load(f)
+        try:
+            with path.open("rb") as f:
+                raw = tomllib.load(f)
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(_explain(path, e)) from e
     s = Settings(
         api_keys={k: str(v) for k, v in raw.get("api_keys", {}).items() if v},
         reputation=_fill(ReputationSettings, raw.get("reputation", {})),

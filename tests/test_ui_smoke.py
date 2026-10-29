@@ -61,3 +61,23 @@ def test_report_prefilled_for_samples(samples, sample):
     assert "True Positive" in reason.value and "эскалация на L2" in escalation.value
     preview = "\n".join(m.value for m in at.markdown)
     assert "не указано" not in preview
+
+
+def test_broken_config_shows_error(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[api_keys]\nabuseipdb = "abc\n', encoding="utf-8")
+    monkeypatch.setenv("SOC_TOOLKIT_CONFIG", str(cfg))
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert not at.exception
+    assert any("закрывающей кавычки" in e.value for e in at.error)
+
+
+def test_keys_from_streamlit_secrets(monkeypatch):
+    import streamlit as st
+
+    from soc_toolkit.ui import state
+
+    fake = {"VT_API_KEY": " vt-key ", "api_keys": {"abuseipdb": "abuse-key"}}
+    monkeypatch.setattr(st, "secrets", fake)
+    assert state.secret_keys() == {"virustotal": "vt-key", "abuseipdb": "abuse-key"}
+    assert state.settings().api_keys["virustotal"] == "vt-key"
