@@ -19,10 +19,14 @@ from soc_toolkit.reports import (
     render_html,
     render_markdown,
 )
+from soc_toolkit.triage import Assessment, assess, specific_remediation
 from soc_toolkit.ui import state
 from soc_toolkit.ui.state import VERDICT_STYLE
 from soc_toolkit.ui.tabs.reputation import policy_gate, provider_picker, results_view, run_check
 
+SAMPLES = [("Splunk: PowerShell", "alert_splunk.json"), ("KUMA: подбор пароля", "alert_kuma.json"),
+           ("Фишинг", "alert_phishing.json"), ("Defender: заблокировано", "alert_defender_blocked.json"),
+           ("Wazuh: SCCM (FP)", "alert_wazuh_fp.json")]
 SEVERITY_ICON = {"critical": "🟣", "high": "🔴", "medium": "🟠", "low": "🟡", "informational": "🔵"}
 
 
@@ -34,35 +38,37 @@ def _load_sample(name: str) -> None:
 
 
 def _input_block() -> AlertSummary | None:
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-    uploaded = c1.file_uploader("Загрузите JSON алерта", type=["json"], label_visibility="collapsed")
-    c2.button("Пример: Splunk", on_click=_load_sample, args=("alert_splunk.json",), width="stretch")
-    c3.button("Пример: KUMA", on_click=_load_sample, args=("alert_kuma.json",), width="stretch")
-    c4.button("Пример: фишинг", on_click=_load_sample, args=("alert_phishing.json",), width="stretch")
+    uploaded = st.file_uploader("Загрузите алерт", type=["json", "txt", "log", "xml", "ndjson", "jsonl"],
+                                label_visibility="collapsed")
+    cols = st.columns(len(SAMPLES))
+    for col, (label, name) in zip(cols, SAMPLES, strict=True):
+        col.button(label, on_click=_load_sample, args=(name,), width="stretch")
     if uploaded is not None and st.session_state.get("_uploaded_name") != uploaded.name:
         st.session_state["alert_raw"] = uploaded.read().decode("utf-8", errors="replace")
         st.session_state["_uploaded_name"] = uploaded.name
         st.session_state["case_id"] = None
-    raw = st.text_area("JSON алерта (Splunk, KUMA, Elastic, Defender или любой JSON)", height=200, key="alert_raw")
+    raw = st.text_area("Алерт: JSON из Splunk, KUMA, Elastic, Wazuh, QRadar, Sentinel, Defender, CrowdStrike, а также "
+                       "NDJSON, CEF, key=value или Windows XML", height=200, key="alert_raw")
     if not raw.strip():
         st.session_state["alert_summary"] = None
         return None
     try:
         summary = parse_alert(raw, allowlist=state.allowlist())
     except json.JSONDecodeError as e:
-        st.error(f"Некорректный JSON: {e}")
+        st.error(f"Не удалось разобрать алерт: {e.msg}. Вставьте JSON, CEF, key=value или XML события.")
         return None
     st.session_state["alert_summary"] = summary
     return summary
 
 
-def _overview(a: AlertSummary) -> None:
+def _overview(a: AlertSummary, x: Assessment) -> None:
     st.subheader(f"{SEVERITY_ICON.get(a.severity, '⚪')} {a.name or 'Алерт без названия'}")
     m = st.columns(4)
     m[0].metric("Критичность", a.severity or "—")
     m[1].metric("Формат", a.source_format)
     m[2].metric("Техник MITRE", len(a.mitre))
     m[3].metric("Индикаторов", len(a.iocs))
+    _recommendation(x)
     if a.times:
         span = a.first_seen if a.first_seen == a.last_seen else f"{a.first_seen} → {a.last_seen}"
         st.caption(f"🕒 Время активности: {span}")
@@ -110,6 +116,27 @@ def _overview(a: AlertSummary) -> None:
                    "; ".join(f"`{v}` → " + ", ".join(f"#{c}" for c in ids) for v, ids in seen.items()))
 
 
+def _recommendation(x: Assessment) -> None:
+    esc = "нужна" if x.escalate else "не нужна"
+    text = f"**Рекомендация: {x.label()}** · уверенность {x.confidence}% · эскалация {esc} · категория " \
+           f"«{category_title('fp' if x.verdict == 'FP' and x.certain else x.category)}»"
+    if not x.certain:
+        st.warning("🧭 " + text)
+    elif x.verdict == "TP":
+        st.error("🧭 " + text)
+    else:
+        st.success("🧭 " + text)
+    with st.expander("Почему так: признаки и их вес"):
+        rows = [{"вес": f"{f.weight:+d}" if f.weight else "0", "признак": f.ru} for f in x.factors + x.impact]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
+                     column_config={"признак": st.column_config.TextColumn(width="large")})
+        st.caption(f"Сумма весов: {x.score}. True Positive от 3, False Positive при 0 и ниже, между ними нужна "
+                   "ручная проверка.")
+        st.markdown(f"**Эскалация.** {x.escalation_why['ru']}")
+        st.caption("Это рекомендация по данным алерта, а не окончательное решение. Проверьте репутацию "
+                   "индикаторов: её результат тоже учитывается. Признаки настраиваются в triage/signals.yaml.")
+
+
 def _iocs_and_reputation(a: AlertSummary) -> None:
     rep = st.session_state["reputation_results"]
     rows = [{**i.as_row(), "репутация": VERDICT_STYLE.get(rep[i.value].verdict.value, "") if i.value in rep else ""}
@@ -145,32 +172,40 @@ def _queries(a: AlertSummary) -> None:
     c2.code(r.kuma, language="sql", wrap_lines=True)
 
 
-def _report(a: AlertSummary) -> None:
+def _report(a: AlertSummary, x: Assessment) -> None:
     s = state.settings()
+    alert_key = hash(st.session_state["alert_raw"])
     c1, c2, c3 = st.columns(3)
-    verdict = c1.radio("Вердикт", ["TP", "FP"], horizontal=True,
+    verdict = c1.radio("Вердикт", ["TP", "FP"], horizontal=True, index=0 if x.verdict == "TP" else 1,
+                       key=f"verdict_{alert_key}_{x.verdict}",
                        format_func=lambda v: "True Positive" if v == "TP" else "False Positive")
     lang = c2.radio("Язык отчёта", ["ru", "en"], horizontal=True,
                     index=0 if s.report.default_language == "ru" else 1,
                     format_func=lambda x: "Русский" if x == "ru" else "English")
     cats = categories()
-    guess = _guess_category(a)
-    category = c3.selectbox("Категория", cats, index=cats.index(guess), format_func=lambda c: category_title(c))
+    category = c3.selectbox("Категория", cats, index=cats.index(x.category) if x.category in cats else 0,
+                            key=f"cat_{alert_key}_{x.category}", format_func=lambda c: category_title(c))
+    if verdict != x.verdict:
+        st.caption("⚠️ Вы выбрали вердикт, отличный от рекомендации. В обосновании отмечено место для "
+                   "подтверждения, допишите его.")
     rep = st.session_state["reputation_results"]
     rep_verdicts = {k: v.verdict.value for k, v in rep.items()}
-    # Черновики пересобираются при смене алерта, вердикта, категории, языка или результатов репутации;
+    # Тексты пересобираются при смене алерта, вердикта, категории, языка или результатов репутации;
     # правки аналитика сохраняются, пока эти входные данные не меняются.
-    draft_key = f"{hash(st.session_state['alert_raw'])}_{verdict}_{category}_{lang}_{len(rep_verdicts)}"
-    st.caption("Обоснование и причина эскалации заполнены черновиком по уликам из алерта. "
+    draft_key = f"{alert_key}_{verdict}_{category}_{lang}_{len(rep_verdicts)}"
+    st.caption("Обоснование, эскалация и рекомендации составлены по уликам из алерта. "
                "Проверьте и допишите то, что выяснили сами.")
-    reason = st.text_area("Обоснование вердикта", draft_reason(a, verdict, lang, rep_verdicts),
-                          key=f"reason_{draft_key}", height=170)
-    escalate = st.toggle("Эскалировать на L2", value=verdict == "TP")
-    esc_reason = st.text_area("Причина эскалации", draft_escalation(a, category, lang) if escalate else "",
-                              disabled=not escalate, key=f"esc_{draft_key}_{escalate}", height=100)
-    remediation = st.text_area("Рекомендации (по одной в строке)",
-                               "\n".join(default_remediation(category, verdict, lang)),
-                               key=f"rem_{category}_{verdict}_{lang}", height=150)
+    reason = st.text_area("Обоснование вердикта", draft_reason(a, verdict, lang, rep_verdicts, x),
+                          key=f"reason_{draft_key}", height=260)
+    default_esc = x.escalate if verdict == x.verdict else verdict == "TP"
+    escalate = st.toggle("Эскалировать на L2", value=default_esc, key=f"esc_toggle_{draft_key}")
+    esc_reason = st.text_area("Причина эскалации" if escalate else "Почему эскалация не нужна",
+                              draft_escalation(a, category, lang, escalate, rep_verdicts, x),
+                              key=f"esc_{draft_key}_{escalate}", height=110)
+    rem_default = list(dict.fromkeys(specific_remediation(a, x, lang, rep_verdicts) if verdict == x.verdict else []))
+    rem_default += [r for r in default_remediation(category, verdict, lang) if r not in rem_default]
+    remediation = st.text_area("Рекомендации (по одной в строке)", "\n".join(rem_default),
+                               key=f"rem_{draft_key}", height=180)
     notes = st.text_area("Заметки аналитика (необязательно)", key="rep_notes")
 
     inp = ReportInput(
@@ -207,25 +242,6 @@ def _report(a: AlertSummary) -> None:
     t2.code(md, language="markdown", wrap_lines=True)
 
 
-def _guess_category(a: AlertSummary) -> str:
-    ids = {h.technique.split(".")[0] for h in a.mitre}
-    if ids & {"T1486", "T1490"}:
-        return "ransomware"
-    if ids & {"T1003", "T1558"}:
-        return "credential_access"
-    if ids & {"T1110"}:
-        return "bruteforce"
-    if ids & {"T1566"}:
-        return "phishing"
-    if ids & {"T1021", "T1570"}:
-        return "lateral"
-    if ids & {"T1041", "T1567"}:
-        return "exfiltration"
-    if ids & {"T1059", "T1204", "T1105", "T1218"}:
-        return "malware"
-    return "generic"
-
-
 def render() -> None:
     st.title("🚨 Разбор алерта")
     a = _input_block()
@@ -233,7 +249,9 @@ def render() -> None:
         st.info("Вставьте JSON алерта или загрузите пример. Приложение распознает сущности, индикаторы и техники "
                 "MITRE, подскажет запросы для расследования и соберёт отчёт.")
         return
-    _overview(a)
+    rep = st.session_state["reputation_results"]
+    x = assess(a, {k: v.verdict.value for k, v in rep.items()})
+    _overview(a, x)
     st.divider()
     t_ioc, t_q, t_rep = st.tabs(["🔎 Индикаторы и репутация", "🧮 Запросы для расследования", "📝 Вердикт и отчёт"])
     with t_ioc:
@@ -241,4 +259,4 @@ def render() -> None:
     with t_q:
         _queries(a)
     with t_rep:
-        _report(a)
+        _report(a, x)

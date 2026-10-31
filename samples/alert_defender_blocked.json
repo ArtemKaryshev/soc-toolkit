@@ -1,0 +1,36 @@
+{
+  "alertId": "da638662401234567890_-1234567890",
+  "title": "'Wacatac' malware was prevented",
+  "description": "Malware and unwanted software are undesirable applications that perform annoying, disruptive, or harmful actions on affected machines.",
+  "severity": "Medium",
+  "category": "Malware",
+  "status": "Resolved",
+  "detectionSource": "WindowsDefenderAv",
+  "threatFamilyName": "Wacatac",
+  "threatName": "Trojan:Win32/Wacatac.B!ml",
+  "classification": null,
+  "determination": null,
+  "computerDnsName": "ws-hr-004.corp.local",
+  "firstActivity": "2026-10-30T11:42:05Z",
+  "lastActivity": "2026-10-30T11:42:06Z",
+  "mitreTechniques": [],
+  "evidence": [
+    {
+      "entityType": "File",
+      "fileName": "invoice_scan.pdf.exe",
+      "filePath": "C:\\Users\\a.smirnova\\Downloads",
+      "sha256": "3f9a1c0b7e5d2a4f6c8e0b1d3a5c7e9f1b3d5a7c9e1f3b5d7a9c1e3f5b7d9a1c",
+      "detectionStatus": "Prevented",
+      "remediationStatus": "Quarantined"
+    },
+    {
+      "entityType": "User",
+      "accountName": "a.smirnova",
+      "domainName": "CORP"
+    },
+    {
+      "entityType": "Url",
+      "url": "http://docs-share-secure.top/files/invoice_scan.pdf.exe"
+    }
+  ]
+}

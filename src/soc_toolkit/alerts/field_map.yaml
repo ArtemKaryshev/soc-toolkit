@@ -4,31 +4,54 @@
 # Покрыты Splunk CIM / ES notable, Kaspersky KUMA, Elastic ECS, Windows/Sysmon, Microsoft Defender, общий JSON.
 # Свои поля можно дописать сюда без изменения кода.
 
-name: [search_name, rule_name, rule.name, alert_name, CorrelationRuleName, signature, title, name, Name, rule,
-       detection_name, ThreatName, AlertName]
-severity: [urgency, severity, Severity, priority, Priority, risk_score, level, event.severity, SeverityName]
-description: [description, Description, message, Message, rule_description, comment]
+name: [search_name, kibana.alert.rule.name, DetectName, offense_type_name, AlertDisplayName, rule_name, rule.name, alert_name, CorrelationRuleName, signature, title, name, Name, rule,
+       detection_name, ThreatName, AlertName, threat_name, malware_name, rule.description]
+severity: [urgency, severity, Severity, priority, Priority, risk_score, level, event.severity, SeverityName,
+           kibana.alert.severity, magnitude, rule.level, threat_severity, cef_severity]
+description: [description, Description, rule_description, comment, AlertDescription, DetectDescription,
+              kibana.alert.reason, offense_description]
 time: ["_time", "@timestamp", timestamp, Timestamp, time, event_time, EventTime, TimeCreated, StartTime, EndTime,
-       firstSeen, first_seen, lastSeen, detection_time, created_at, UtcTime, event.created, BeginTime]
+       firstSeen, first_seen, lastSeen, detection_time, created_at, UtcTime, event.created, BeginTime,
+       firstActivity, lastActivity, alertCreationTime, start_time, end_time]
 host: [host, hostname, host.name, dest, dest_host, dest_nt_host, src_host, src_nt_host, computer, ComputerName,
        Computer, DeviceHostName, SourceHostName, DestinationHostName, device_name, DeviceName, Workstation,
-       WorkstationName]
+       WorkstationName,
+       agent.name, shost, dhost, Workstation_Name, HostName, CompromisedEntity, device.hostname, endpoint,
+       computerDnsName, deviceDnsName]
 user: [user, user_name, user.name, username, src_user, dest_user, account, AccountName, TargetUserName,
-       SubjectUserName, SourceUserName, DestinationUserName, User, InitiatingProcessAccountName, recipient]
+       SubjectUserName, SourceUserName, DestinationUserName, User, InitiatingProcessAccountName, recipient,
+       suser, duser, srcuser, dstuser, Account_Name, AccountUpn, UserName, user.email, userPrincipalName,
+       TargetUser]
 src_ip: [src_ip, source_ip, src, source.ip, SourceAddress, IpAddress, client_ip, c_ip, clientip, LocalIP,
-         SourceIp, RemoteIP]
-dest_ip: [dest_ip, destination_ip, dst, dst_ip, destination.ip, DestinationAddress, DestinationIp, dest, RemoteIp]
+         SourceIp, RemoteIP,
+         srcip, Source_Network_Address, source_address, sourceip, client.ip, CallerIpAddress, ClientIP]
+dest_ip: [dest_ip, destination_ip, dst, dst_ip, destination.ip, DestinationAddress, DestinationIp, dest, RemoteIp,
+          dstip, destination_address, destinationip, server.ip]
 ip: [ip, DeviceAddress, ip_address, IPAddress]
 process: [process, process_name, process.name, Image, NewProcessName, DeviceProcessName, SourceProcessName,
-          DestinationProcessName, FileName, InitiatingProcessFileName, app]
+          DestinationProcessName, FileName, InitiatingProcessFileName, app,
+          New_Process_Name, ImageFileName, sproc, dproc, process.executable, processName]
 parent_process: [ParentImage, parent_process, parent_process_name, process.parent.name, ParentProcessName,
-                 InitiatingProcessParentFileName]
+                 InitiatingProcessParentFileName,
+                 Creator_Process_Name, ParentImageFileName, ParentBaseFileName, parentImage,
+                 process.parent.executable]
 command: [CommandLine, command_line, cmdline, process_command_line, process.command_line, ParentCommandLine,
-          ProcessCommandLine, InitiatingProcessCommandLine, DeviceCustomString1]
-file: [file_name, file_path, file.name, file.path, TargetFilename, FilePath, attachment, attachments, FolderPath]
-hash: [hash, Hashes, file_hash, md5, sha1, sha256, SHA256, MD5, SHA1, FileHash, file.hash.sha256]
-url: [url, URL, RequestUrl, request_url, uri, url.full, RemoteUrl]
+          ProcessCommandLine, InitiatingProcessCommandLine, DeviceCustomString1,
+          Process_Command_Line, processCommandLine, process.args, ScriptBlockText]
+file: [file_name, file_path, file.name, file.path, TargetFilename, FilePath, attachment, attachments, FolderPath,
+      fname, filePath, TargetFileName, Object_Name]
+hash: [hash, Hashes, file_hash, md5, sha1, sha256, SHA256, MD5, SHA1, FileHash, file.hash.sha256,
+      fileHash, SHA256String, MD5String, sha256hash]
+url: [url, URL, RequestUrl, request_url, uri, url.full, RemoteUrl, requestUrl, request, request_uri, http.url]
 domain: [domain, query, QueryName, dns_query, DestinationDnsDomain, url_domain, dns.question.name]
 event_id: [EventCode, EventID, event_id, DeviceEventClassID, event.code, signature_id, ActionType]
 mitre: [mitre_technique, mitre_technique_id, technique, techniques, annotations.mitre_attack, threat.technique.id,
         AttackTechniques, MitreTechniques]
+# Чем закончилась активность: заблокирована, разрешена, успешна (для движка вердикта)
+outcome: [action, Action, act, outcome, event.outcome, event.action, DeviceAction, ActionTaken, action_taken,
+          remediationStatus, remediation_status, PreventionStatus, ThreatStatus, result, Result,
+          delivery_action, DeliveryAction, PatternDispositionDescription, detectionStatus]
+# Решение, уже принятое в SIEM/EDR (если алерт выгружен после разбора)
+disposition: [classification, Classification, determination, Determination, disposition, Disposition,
+              verdict, Verdict, resolution, Resolution, close_reason, closing_reason, status_reason,
+              kibana.alert.workflow_reason]

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "soc-toolkit"
-version = "1.0.1"
+version = "1.1.0"
 description = "Рабочее место аналитика SOC L1: IOC, отчёты по алертам, репутация, запросы SPL/KUMA, справочник ATT&CK/LOLBAS/EventID, история кейсов"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,6 +42,7 @@ soc_toolkit = [
     "ui/tabs/*.py",
     "config.example.toml",
     "reports/*.yaml",
+    "triage/*.yaml",
 ]
 
 [tool.pytest.ini_options]

@@ -57,7 +57,7 @@
 
 ## Reason for Escalating the Alert (причина эскалации)
 
-{{ (ctx.escalation_reason or "не указано") if ctx.escalate else "Эскалация не требуется." }}
+{{ ctx.escalation_reason or ("не указано" if ctx.escalate else "Эскалация не требуется.") }}
 
 ## Recommended Remediation Actions (рекомендации)
 

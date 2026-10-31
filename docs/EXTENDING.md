@@ -41,6 +41,28 @@
 
 Эвристики MITRE (регулярное выражение → техника) лежат в `src/soc_toolkit/alerts/mitre_hints.yaml`.
 
+## Признаки для рекомендации TP/FP
+
+Файл `src/soc_toolkit/triage/signals.yaml`. Каждый признак: регулярное выражение, вес и текст на двух языках.
+Положительный вес говорит за True Positive, отрицательный за False Positive. Сумма от 3 и выше даёт TP,
+0 и ниже FP, между ними «требует проверки» (рекомендуется TP с эскалацией).
+
+```yaml
+- id: our_admin_tool
+  pattern: 'corp-deploy\.exe|\\fileserver\\deploy\\'
+  where: processes        # evidence (весь алерт, по умолчанию) | commands | processes | name
+  weight: -3
+  ru: запуск из нашей системы развёртывания
+  en: started by our deployment system
+```
+
+`exec: true` помечает признак реального выполнения на хосте: без таких признаков подтверждённая атака
+категорий malware/phishing/bruteforce/generic не эскалируется (L1 закрывает её сам). Кража учётных данных,
+шифровальщик, перемещение и выгрузка данных эскалируются всегда.
+
+Если в ваших алертах поля называются иначе, добавьте их в `alerts/field_map.yaml`: категории `outcome`
+(действие средства защиты: blocked, quarantined, allowed) и `disposition` (решение, уже принятое в SIEM).
+
 ## Свой шаблон отчёта
 
 Скопируйте `src/soc_toolkit/reports/templates/report_ru.md.j2` в свою папку, измените и укажите папку

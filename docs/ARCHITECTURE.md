@@ -10,9 +10,13 @@ src/soc_toolkit/
 │   ├── sources.py       чтение файлов, разбор .eml
 │   └── allowlist.yaml   встроенный список легитимных доменов и адресов
 ├── alerts/
-│   ├── parser.py        JSON алерта → AlertSummary (сущности, таймлайн, MITRE, IOC)
-│   ├── field_map.yaml   сопоставление полей Splunk/KUMA/ECS/Defender
+│   ├── loader.py        текст из SIEM → dict: JSON, NDJSON, CEF, key=value, Windows XML, вложенный JSON
+│   ├── parser.py        dict алерта → AlertSummary (сущности, таймлайн, MITRE, IOC, исход)
+│   ├── field_map.yaml   сопоставление полей Splunk/KUMA/ECS/Wazuh/QRadar/Sentinel/Defender/CrowdStrike
 │   └── mitre_hints.yaml эвристики «признак → техника»
+├── triage/
+│   ├── engine.py        оценка: признаки с весами → TP/FP, уверенность, эскалация, рекомендации
+│   └── signals.yaml     признаки атаки и легитимной работы (регулярные выражения и веса)
 ├── reputation/
 │   ├── base.py          Provider, RepResult, Verdict, ProviderError
 │   ├── providers/       VirusTotal, AbuseIPDB, OTX, GreyNoise, Shodan InternetDB, URLhaus
@@ -24,6 +28,7 @@ src/soc_toolkit/
 │   └── templates/       auth.yaml, endpoint.yaml, network.yaml
 ├── reports/
 │   ├── builder.py       контекст отчёта, Markdown (Jinja2), HTML, DOCX
+│   ├── reasoning.py     тексты обоснования и эскалации по оценке triage
 │   ├── remediation.yaml рекомендации по категориям RU/EN
 │   └── templates/       report_ru.md.j2, report_en.md.j2
 ├── reference/
@@ -40,12 +45,14 @@ src/soc_toolkit/
 ## Поток данных при разборе алерта
 
 ```
-JSON алерта ─► alerts.parse_alert ─► AlertSummary ─┬─► ioc.extract (+ decode, allowlist)
-                                                   ├─► MITRE (явные ID + эвристики) ─► reference
-                                                   ├─► query_params ─► queries.QueryEngine.suggest/render
-                                                   ├─► reputation.ReputationService.check (внешние IOC)
-                                                   └─► reports.render_markdown ─► HTML / DOCX
-                                                                  └─► cases.CaseStore.save (+ case_iocs)
+текст алерта ─► alerts.loader ─► alerts.parse_alert ─► AlertSummary
+    AlertSummary ─┬─► ioc.extract (+ decode, allowlist)
+                  ├─► triage.assess (+ репутация) ─► вердикт, уверенность, эскалация, рекомендации
+                  ├─► MITRE (явные ID + эвристики) ─► reference
+                  ├─► query_params ─► queries.QueryEngine.suggest/render
+                  ├─► reputation.ReputationService.check (внешние IOC)
+                  └─► reports.reasoning + render_markdown ─► HTML / DOCX
+                                 └─► cases.CaseStore.save (+ case_iocs)
 ```
 
 ## Принципы
