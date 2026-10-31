@@ -1,0 +1,58 @@
+# Конфигурация SOC Toolkit.
+# Положите файл как config.toml в текущую папку или в ~/.soc_toolkit/
+# (команда `soc-toolkit init` сделает это сама). Путь можно задать в SOC_TOOLKIT_CONFIG.
+# config.toml внесён в .gitignore: не публикуйте ключи.
+
+log_level = "INFO"
+
+[api_keys]
+# Ключи можно задать и переменными окружения:
+# VT_API_KEY, ABUSEIPDB_API_KEY, OTX_API_KEY, GREYNOISE_API_KEY, ABUSECH_API_KEY
+virustotal = ""   # https://www.virustotal.com/gui/my-apikey  (бесплатно: 4 запроса/мин, 500/день)
+abuseipdb = ""    # https://www.abuseipdb.com/account/api     (бесплатно: 1000 проверок/день)
+otx = ""          # https://otx.alienvault.com/api
+greynoise = ""    # необязательно: Community API работает и без ключа
+urlhaus = ""      # https://auth.abuse.ch/  (бесплатный Auth-Key для URLhaus)
+
+[reputation]
+enabled = true
+# Подтверждение, что вы вправе отправлять индикаторы во внешние сервисы (см. README, раздел о политике).
+policy_acknowledged = false
+allow_internal = false        # отправлять внутренние IP/домены (почти никогда не нужно)
+cache_ttl_hours = 24
+max_workers = 4
+timeout = 15
+max_retries = 2
+proxy = ""                    # например "http://proxy.corp.local:3128"
+verify_tls = true
+
+[reputation.rate_limits]      # запросов в минуту на сервис
+virustotal = 4
+abuseipdb = 30
+otx = 60
+greynoise = 10
+shodan_internetdb = 60
+urlhaus = 60
+
+[queries]
+win_index = "wineventlog"
+sysmon_index = "sysmon"
+sysmon_sourcetype = "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+proxy_index = "proxy"
+dns_index = "dns"
+email_index = "email"
+firewall_index = "firewall"
+earliest = "-24h"
+kuma_limit = 250
+custom_templates_dir = ""     # папка с вашими *.yaml шаблонами запросов
+
+[report]
+default_language = "ru"       # ru | en
+analyst_name = ""
+organization = ""
+defang_indicators = true
+custom_templates_dir = ""     # папка с вашими report_ru.md.j2 / report_en.md.j2
+
+[ioc]
+use_builtin_allowlist = true
+allowlist_file = ""           # свой allowlist в формате src/soc_toolkit/ioc/allowlist.yaml

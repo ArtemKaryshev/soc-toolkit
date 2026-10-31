@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 from ..ioc import IOC, Allowlist, extract
+from .loader import load_alert_data
 
 HERE = Path(__file__).resolve().parent
 
@@ -70,6 +71,9 @@ class AlertSummary:
     mitre: list[MitreHint] = field(default_factory=list)
     timeline: list[TimelineEntry] = field(default_factory=list)
     iocs: list[IOC] = field(default_factory=list)
+    outcomes: list[str] = field(default_factory=list)       # action/outcome: blocked, allowed, success...
+    dispositions: list[str] = field(default_factory=list)   # решение, уже принятое в SIEM/EDR
+    alert_count: int = 1                                    # сколько алертов во входных данных
     raw: Any = None
 
     @property
@@ -140,20 +144,38 @@ def _key_of(path: str) -> tuple[str, str]:
     return (parts[-1] if parts else path), ".".join(parts)
 
 
+# Родительские объекты, у которых поле name означает не название алерта (ECS: process.name, host.name)
+ENTITY_PARENTS = {"process", "parent", "host", "user", "agent", "file", "source", "destination", "device",
+                  "observer", "service", "dns", "url", "client", "server", "organization", "geo", "os", "entity",
+                  "account", "manager", "decoder", "group", "tags", "location", "provider", "evidence", "entities"}
+
+
 def _collect(flat: list[tuple[str, Any]], category: str) -> list[str]:
-    wanted = {k.lower() for k in field_map()[category]}
-    values: list[str] = []
-    for path, v in flat:
+    """Значения полей категории. Порядок: по приоритету ключа в field_map, затем по порядку в алерте."""
+    keys = [k.lower() for k in field_map()[category]]
+    rank = {k: i for i, k in reversed(list(enumerate(keys)))}
+    dotted = [k for k in keys if "." in k]
+    found: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    for pos, (path, v) in enumerate(flat):
         leaf, clean = _key_of(path)
-        if v in (None, "", "-", "N/A") or isinstance(v, bool):
+        if v in (None, "", "-", "N/A") or isinstance(v, (bool, dict, list)):
             continue
-        # совпадение по последнему ключу или по полному пути (ECS: source.ip)
-        if leaf.lower() in wanted or clean.lower() in wanted or any(clean.lower().endswith("." + w) for w in wanted
-                                                                     if "." in w):
-            sv = str(v).strip()
-            if sv and sv not in values:
-                values.append(sv)
-    return values
+        leaf_l, clean_l = leaf.lower(), clean.lower()
+        r = rank.get(clean_l)
+        if r is None:
+            r = next((rank[k] for k in dotted if clean_l.endswith("." + k)), None)
+        if r is None and leaf_l in rank:
+            parent = clean_l.split(".")[-2] if "." in clean_l else ""
+            if not (category == "name" and leaf_l == "name" and parent in ENTITY_PARENTS):
+                r = rank[leaf_l]
+        if r is None:
+            continue
+        sv = str(v).strip()
+        if sv and sv not in seen:
+            seen.add(sv)
+            found.append((r, pos, sv))
+    return [v for _, _, v in sorted(found)]
 
 
 SEVERITY_WORDS = {
@@ -163,7 +185,7 @@ SEVERITY_WORDS = {
 }
 
 
-def normalize_severity(raw: str) -> str:
+def normalize_severity(raw: str, fmt: str = "generic") -> str:
     s = raw.strip().lower()
     if s in SEVERITY_WORDS:
         return SEVERITY_WORDS[s]
@@ -171,7 +193,9 @@ def normalize_severity(raw: str) -> str:
         n = float(s)
     except ValueError:
         return raw
-    # Шкалы 0-10 (KUMA priority, ECS) и 0-100 (risk score)
+    if fmt == "wazuh":   # rule.level 0-15
+        return "critical" if n >= 12 else "high" if n >= 8 else "medium" if n >= 4 else "low"
+    # Шкалы 0-10 (KUMA priority, QRadar, CEF) и 0-100 (risk score)
     if n > 10:
         n /= 10
     return "critical" if n >= 9 else "high" if n >= 7 else "medium" if n >= 4 else "low"
@@ -179,14 +203,27 @@ def normalize_severity(raw: str) -> str:
 
 def detect_format(flat_keys: set[str]) -> str:
     keys = {k.lower() for k in flat_keys}
-    if {"correlationrulename", "deviceeventclassid"} & keys or any(k.startswith("devicecustom") for k in keys):
+    leaves = {k.rsplit(".", 1)[-1] for k in keys}
+    if "cef_version" in keys:
+        return "cef"
+    if {"correlationrulename", "deviceeventclassid"} & leaves or any(k.startswith("devicecustom") for k in leaves):
         return "kuma"
-    if {"search_name", "_time", "orig_sid", "urgency"} & keys or "sourcetype" in keys:
+    if {"rule.level", "agent.name"} <= keys or "decoder.name" in keys:
+        return "wazuh"
+    if {"offense_type", "magnitude", "offense_source"} & leaves:
+        return "qradar"
+    if {"alertname", "compromisedentity", "extendedproperties"} & leaves or "entities" in leaves:
+        return "sentinel"
+    if {"detectname", "detectdescription", "parentimagefilename"} & leaves:
+        return "crowdstrike"
+    if {"search_name", "_time", "orig_sid", "urgency", "sourcetype", "_raw"} & leaves:
         return "splunk"
     if "@timestamp" in keys or any(k.startswith(("event.", "kibana.")) for k in keys):
         return "elastic"
-    if {"alertid", "devicename", "initiatingprocessfilename"} & keys:
+    if {"alertid", "devicename", "initiatingprocessfilename", "detectionsource"} & leaves:
         return "defender"
+    if {"eventid", "computer", "provider"} <= leaves or "timecreated" in leaves:
+        return "windows"
     return "generic"
 
 
@@ -229,10 +266,14 @@ def _mitre(flat: list[tuple[str, Any]], blob: str) -> list[MitreHint]:
 
 
 def parse_alert(raw: str | dict[str, Any] | list[Any], allowlist: Allowlist | None = None) -> AlertSummary:
-    """Разобрать алерт. Принимает JSON-строку, dict или list (несколько событий)."""
-    data = json.loads(raw) if isinstance(raw, str) else raw
+    """Разобрать алерт.
+
+    Принимает строку (JSON, NDJSON, CEF, key=value, Windows XML; см. loader.py), dict или list.
+    """
+    data = load_alert_data(raw) if isinstance(raw, str) else raw
     flat = _flatten(data)
     blob = json.dumps(data, ensure_ascii=False)
+    fmt = detect_format({_key_of(p)[1] for p, _ in flat})
 
     hosts: list[str] = []
     src_ips: list[str] = []
@@ -243,20 +284,27 @@ def parse_alert(raw: str | dict[str, Any] | list[Any], allowlist: Allowlist | No
         (src_ips if _is_ip(v) else hosts).append(v)
     for v in _collect(flat, "dest_ip") + _collect(flat, "ip"):
         (dest_ips if _is_ip(v) else hosts).append(v)
+    # WS-01 и WS-01.corp.local один хост: оставляем полное имя
+    hosts = [h for h in dict.fromkeys(hosts)
+             if not any(o.lower().startswith(h.lower() + ".") for o in hosts if o != h)]
     src_set = set(src_ips)
     dest_ips = [ip for ip in dest_ips if ip not in src_set]
 
     names = _collect(flat, "name")
     sev = _collect(flat, "severity")
     desc = _collect(flat, "description")
+    desc = [d for d in desc if d not in names[:1]]
+    if not desc:
+        # Короткое message подходит как описание; длинное (полный текст события) нет
+        desc = [str(v) for p, v in flat if _key_of(p)[0].lower() == "message" and 0 < len(str(v)) <= 300][:1]
     return AlertSummary(
         name=names[0] if names else "",
-        severity=normalize_severity(sev[0]) if sev else "",
+        severity=normalize_severity(sev[0], fmt) if sev else "",
         description=desc[0] if desc else "",
-        source_format=detect_format({_key_of(p)[1] for p, _ in flat}),
+        source_format=fmt,
         times=sorted(_collect(flat, "time"), key=_sort_key),
         hosts=list(dict.fromkeys(hosts)),
-        users=_collect(flat, "user"),
+        users=[u for u in _collect(flat, "user") if u.strip("-$ ") and u.upper() not in ("SYSTEM$", "N/A")],
         src_ips=list(dict.fromkeys(src_ips)),
         dest_ips=list(dict.fromkeys(dest_ips)),
         processes=_collect(flat, "process"),
@@ -270,5 +318,8 @@ def parse_alert(raw: str | dict[str, Any] | list[Any], allowlist: Allowlist | No
         mitre=_mitre(flat, blob),
         timeline=_timeline(data),
         iocs=extract(blob.replace("\\\\", "\\"), allowlist=allowlist),
+        outcomes=_collect(flat, "outcome"),
+        dispositions=_collect(flat, "disposition"),
+        alert_count=len(data) if isinstance(data, list) and all(isinstance(x, dict) for x in data) else 1,
         raw=data,
     )

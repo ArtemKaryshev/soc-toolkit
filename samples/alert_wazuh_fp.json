@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-10-30T02:15:07.412+0300",
+  "rule": {
+    "level": 10,
+    "description": "Suspicious PowerShell: execution policy bypass",
+    "id": "92057",
+    "mitre": {
+      "id": [
+        "T1059.001"
+      ],
+      "tactic": [
+        "Execution"
+      ]
+    },
+    "groups": [
+      "windows",
+      "sysmon"
+    ]
+  },
+  "agent": {
+    "id": "014",
+    "name": "WS-FIN-022",
+    "ip": "10.10.30.22"
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "data": {
+    "win": {
+      "system": {
+        "eventID": "1",
+        "computer": "WS-FIN-022.corp.local",
+        "providerName": "Microsoft-Windows-Sysmon",
+        "systemTime": "2026-10-29T23:15:07.401Z"
+      },
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "commandLine": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Windows\\CCM\\SystemTemp\\5f1c2e7a-inventory.ps1\"",
+        "parentImage": "C:\\Windows\\CCM\\CcmExec.exe",
+        "parentCommandLine": "C:\\Windows\\CCM\\CcmExec.exe",
+        "user": "NT AUTHORITY\\SYSTEM",
+        "hashes": "SHA256=DE96A6E69944335375DC1AC238336066889D9FFC7D73628EF4FE1B1B160AB32C",
+        "company": "Microsoft Corporation"
+      }
+    }
+  },
+  "decoder": {
+    "name": "windows_eventchannel"
+  },
+  "location": "EventChannel"
+}

@@ -1,0 +1,245 @@
+# Признаки для оценки алерта. Каждый признак: регулярное выражение по тексту алерта и вес.
+# Положительный вес говорит за True Positive, отрицательный за False Positive (легитимная активность).
+# where: all (весь алерт, по умолчанию) | commands (командные строки и раскодированные команды)
+#        | processes (процессы и родители) | name (название и описание правила)
+# exec: true значит, что признак говорит о реальном выполнении на хосте (важно для эскалации).
+# category подсказывает категорию инцидента. Свои признаки можно дописать сюда без изменения кода.
+
+# --- Выполнение и загрузка ---
+- id: ps_encoded
+  pattern: '(powershell|pwsh)\S*\s.*\s-(e|en|enc|enco|encod|encode|encoded|encodedcommand)\s+[A-Za-z0-9+/=]{16,}'
+  where: commands
+  weight: 3
+  exec: true
+  category: malware
+  ru: PowerShell запущен с закодированной командой (-enc), так обычно скрывают полезную нагрузку
+  en: PowerShell was started with an encoded command (-enc), a common way to hide the payload
+- id: download_cradle
+  pattern: 'downloadstring|downloadfile|downloaddata|net\.webclient|invoke-webrequest|\biwr\s|invoke-restmethod|start-bitstransfer|bitsadmin\s+/transfer|certutil.+-urlcache|curl\s+-o|wget\s+http'
+  where: commands
+  weight: 3
+  exec: true
+  category: malware
+  ru: команда скачивает файл или скрипт из интернета
+  en: the command downloads a file or script from the internet
+- id: iex
+  pattern: '\biex\b|invoke-expression'
+  where: commands
+  weight: 2
+  exec: true
+  category: malware
+  ru: скачанный код выполняется в памяти (IEX / Invoke-Expression)
+  en: downloaded code is executed in memory (IEX / Invoke-Expression)
+- id: ps_stealth
+  pattern: '-w(indowstyle)?\s+h(idden)?\b|-nop\b|-noprofile|-ep\s+bypass|-exec(utionpolicy)?\s+bypass|-noni\b'
+  where: commands
+  weight: 1
+  exec: true
+  ru: PowerShell запущен со скрытым окном и обходом политики выполнения
+  en: PowerShell was started with a hidden window and execution policy bypass
+- id: lolbin_proxy
+  pattern: 'mshta(\.exe)?\s+["'']?(https?:|javascript:|vbscript:)|regsvr32.+/i:\s*https?:|rundll32.+(javascript:|url\.dll|shell32\.dll,\s*shellexec_rundll)|certutil.+-decode|msiexec.+/q.+https?:|installutil.+/u'
+  where: commands
+  weight: 3
+  exec: true
+  category: malware
+  ru: системная утилита (LOLBin) используется для запуска стороннего кода
+  en: a system binary (LOLBin) is used to run third-party code
+- id: user_writable_exec
+  pattern: '\\(users\\[^\\]+\\(appdata|downloads|desktop)|windows\\temp|programdata|perflogs|users\\public|\$recycle\.bin)\\[^"\s]*\.(exe|dll|scr|ps1|bat|cmd|vbs|js|hta|jar)\b'
+  where: processes
+  weight: 2
+  exec: true
+  category: malware
+  ru: исполняемый файл запущен из папки, доступной пользователю на запись (AppData, Temp, Downloads, Public)
+  en: an executable was started from a user-writable folder (AppData, Temp, Downloads, Public)
+- id: double_extension
+  pattern: '\.(pdf|docx?|xlsx?|jpe?g|png|txt|zip|rar)\.(exe|scr|js|jse|vbs|hta|bat|cmd|lnk|iso)\b'
+  weight: 3
+  category: malware
+  ru: файл с двойным расширением, маскировка исполняемого файла под документ
+  en: a file with a double extension, an executable disguised as a document
+- id: macro_doc
+  pattern: '\.(docm|xlsm|pptm|dotm|xlam)\b'
+  weight: 1
+  category: phishing
+  ru: документ с макросами
+  en: a macro-enabled document
+
+# --- Учётные данные ---
+- id: mimikatz
+  pattern: 'mimikatz|sekurlsa|kerberos::|lsadump::|privilege::debug|invoke-mimikatz'
+  weight: 5
+  exec: true
+  category: credential_access
+  ru: признаки Mimikatz, кража учётных данных
+  en: Mimikatz indicators, credential theft
+- id: lsass_dump
+  pattern: 'procdump.{0,40}lsass|comsvcs(\.dll)?.{0,20}minidump|lsass\.dmp|nanodump|lsass.{0,30}(0x1010|0x1410|0x1fffff)'
+  weight: 5
+  exec: true
+  category: credential_access
+  ru: дамп памяти LSASS, кража учётных данных
+  en: LSASS memory dump, credential theft
+- id: ntds
+  pattern: 'ntdsutil.+(ifm|snapshot)|ntds\.dit|reg(\.exe)?\s+save\s+hklm\\(sam|security|system)'
+  weight: 4
+  exec: true
+  category: credential_access
+  ru: копирование базы учётных записей (NTDS.dit или кусты SAM/SECURITY)
+  en: copying the account database (NTDS.dit or SAM/SECURITY hives)
+- id: kerberoast
+  pattern: 'kerberoast|rubeus|invoke-kerberoast|getuserspns'
+  weight: 4
+  exec: true
+  category: credential_access
+  ru: признаки Kerberoasting
+  en: Kerberoasting indicators
+
+# --- Разведка, закрепление, перемещение ---
+- id: ad_recon
+  pattern: 'net\s+group\s+"?domain admins|nltest\s+/(dclist|domain_trusts)|adfind|bloodhound|sharphound|get-netuser|get-domainuser|whoami\s+/all'
+  where: commands
+  weight: 3
+  exec: true
+  category: lateral
+  ru: разведка Active Directory (доменные администраторы, контроллеры, доверия)
+  en: Active Directory reconnaissance (domain admins, controllers, trusts)
+- id: local_recon
+  pattern: '\b(whoami|systeminfo|ipconfig\s+/all|net\s+user|net\s+localgroup|tasklist|quser|arp\s+-a)\b'
+  where: commands
+  weight: 1
+  exec: true
+  ru: команды разведки системы (whoami, systeminfo, net user)
+  en: system discovery commands (whoami, systeminfo, net user)
+- id: account_add
+  pattern: 'net(1)?\s+user\s+\S+\s+\S+\s+/add|net(1)?\s+localgroup\s+"?administrators"?\s+\S+\s+/add|add-localgroupmember|new-localuser'
+  where: commands
+  weight: 3
+  exec: true
+  ru: создание учётной записи или добавление в группу администраторов из командной строки
+  en: an account is created or added to the administrators group from the command line
+- id: persistence
+  pattern: 'schtasks(\.exe)?\s+/create|reg(\.exe)?\s+add\s+\S*\\currentversion\\run|sc(\.exe)?\s+create|new-service|new-scheduledtask|\\startup\\'
+  where: commands
+  weight: 2
+  exec: true
+  ru: создание механизма автозапуска (задача, служба, ключ Run, папка автозагрузки)
+  en: a persistence mechanism is created (task, service, Run key, startup folder)
+- id: remote_exec
+  pattern: 'psexec|psexesvc|wmic\s+/node:|invoke-command\s+-computername|winrs|\\\\[\w.-]+\\(admin|c)\$'
+  weight: 2
+  exec: true
+  category: lateral
+  ru: удалённое выполнение команд на другом хосте (PsExec, WMI, WinRM, админ-шары)
+  en: remote command execution on another host (PsExec, WMI, WinRM, admin shares)
+
+# --- Уклонение и разрушение ---
+- id: defense_evasion
+  pattern: 'set-mppreference.+disable|disablerealtimemonitoring|add-mppreference.+exclusion|sc\s+(stop|config)\s+windefend|netsh\s+advfirewall\s+set\s+\S+\s+state\s+off'
+  weight: 3
+  exec: true
+  ru: отключение антивируса или файрвола, добавление исключений
+  en: antivirus or firewall is disabled, or exclusions are added
+- id: log_clear
+  pattern: 'wevtutil(\.exe)?\s+cl|clear-eventlog|remove-eventlog|\b1102\b.{0,40}(audit log|журнал)'
+  weight: 3
+  exec: true
+  ru: очистка журналов событий
+  en: event logs are cleared
+- id: shadow_delete
+  pattern: 'vssadmin.+delete\s+shadows|wmic\s+shadowcopy\s+delete|wbadmin.+delete|bcdedit.+recoveryenabled\s+no|win32_shadowcopy.+delete'
+  weight: 5
+  exec: true
+  category: ransomware
+  ru: удаление теневых копий и отключение восстановления, типичный шаг шифровальщика
+  en: shadow copies are deleted and recovery is disabled, a typical ransomware step
+- id: ransom_note
+  pattern: 'your files (have been|are) encrypted|readme.{0,10}(decrypt|restore)|how_to_decrypt|\.(locked|encrypted|crypt)\b'
+  weight: 5
+  exec: true
+  category: ransomware
+  ru: признаки шифрования файлов или записка о выкупе
+  en: signs of file encryption or a ransom note
+
+# --- Сеть и выгрузка ---
+- id: tunneling
+  pattern: '\b(ngrok|chisel|plink|cloudflared|frpc|ligolo)\b'
+  weight: 3
+  exec: true
+  ru: инструмент туннелирования трафика
+  en: a traffic tunneling tool
+- id: exfil_tool
+  pattern: '\brclone\b|mega\.nz|megacmd|transfer\.sh|anonfiles|gofile\.io|file\.io\b|pastebin\.com'
+  weight: 3
+  category: exfiltration
+  ru: выгрузка данных во внешнее облачное хранилище
+  en: data upload to an external cloud storage
+- id: web_attack
+  pattern: 'union(\s|\+|%20)+select|<script|%3cscript|\.\./\.\./|%2e%2e%2f|/etc/passwd|cmd\.exe\?|;\s*(wget|curl)\s|\$\{jndi:|xp_cmdshell'
+  weight: 3
+  category: generic
+  ru: в запросе полезная нагрузка веб-атаки (SQLi, XSS, обход каталогов, внедрение команд)
+  en: the request contains a web attack payload (SQLi, XSS, path traversal, command injection)
+
+# --- Детекты средств защиты и почта ---
+- id: malware_name
+  pattern: 'trojan|backdoor|ransom|exploit[:/]|hacktool|cobalt\s?strike|meterpreter|metasploit|emotet|qakbot|qbot|icedid|agenttesla|redline|lumma|asyncrat|njrat|remcos|formbook|sliver|brute\s?ratel|bumblebee'
+  weight: 3
+  category: malware
+  ru: средство защиты определило вредоносное ПО по сигнатуре
+  en: the security tool identified malware by signature
+- id: spf_dmarc_fail
+  pattern: 'spf["\s:=]+"?(fail|softfail)|dmarc["\s:=]+"?fail|spf=(fail|softfail)|dmarc=fail'
+  weight: 2
+  category: phishing
+  ru: отправитель письма не прошёл проверку SPF/DMARC (подделка домена)
+  en: the email sender failed SPF/DMARC checks (domain spoofing)
+- id: link_clicked
+  pattern: '\bclicked\b|click_allowed|proxy_allowed|перешёл по ссылке|urlclick'
+  weight: 3
+  exec: true
+  category: phishing
+  ru: пользователь перешёл по ссылке из письма
+  en: the user clicked the link in the email
+- id: credentials_submitted
+  pattern: 'credentials?_submitted|form_submit|post\s+/.{0,40}(login|signin|auth)|ввёл учётные данные'
+  weight: 3
+  exec: true
+  category: phishing
+  ru: учётные данные отправлены на внешний сайт
+  en: credentials were submitted to an external site
+- id: lookalike_domain
+  pattern: '(micros0ft|rnicrosoft|paypa1|g00gle|0ffice|outlook-|-login|login-|secure-|verify-|account-update|helpdesk-)[\w.-]*\.(com|net|org|xyz|top|info|online|site|ru)'
+  weight: 2
+  category: phishing
+  ru: домен маскируется под известный сервис (подмена символов, слова login/secure/verify)
+  en: the domain imitates a well-known service (character swaps, words like login/secure/verify)
+
+# --- Признаки легитимной активности (отрицательный вес) ---
+- id: mgmt_tool
+  pattern: 'ccmexec|\\ccm\\|sccm|configmgr|intunemanagementextension|\bintune\b|tanium|ansible|puppet|chef-client|bigfix|besclient|landesk|ivanti|manageengine|desktopcentral|wsus|kaspersky security center|klnagent'
+  where: processes
+  weight: -3
+  ru: процесс запущен системой централизованного управления (SCCM, Intune, Tanium, Ansible и т. п.)
+  en: the process was started by a management system (SCCM, Intune, Tanium, Ansible, etc.)
+- id: scanner
+  pattern: 'nessus|tenable|qualys|rapid7|nexpose|insightvm|openvas|greenbone|maxpatrol|redcheck|xspider|acunetix|nmap.{0,20}(scheduled|corp)'
+  weight: -3
+  ru: активность сканера уязвимостей (Nessus, Qualys, MaxPatrol и т. п.)
+  en: vulnerability scanner activity (Nessus, Qualys, MaxPatrol, etc.)
+- id: backup_update
+  pattern: 'veeam|acronis|commvault|veritas|mpcmdrun.+(signatureupdate|-scan)|windowsupdate|wuauclt|googleupdate|microsoftedgeupdate|officeclicktorun|msiexec.+\\program files'
+  weight: -2
+  ru: активность резервного копирования или обновления ПО
+  en: backup or software update activity
+- id: eicar
+  pattern: 'eicar'
+  weight: -5
+  ru: это тестовый файл EICAR, проверка работы антивируса
+  en: this is the EICAR test file, an antivirus functionality check
+- id: test_activity
+  pattern: '\b(pentest|pen-test|red\s?team|purple\s?team|authorized\s+(scan|test)|плановое\s+(сканирование|тестирование)|учения|тестов(ый|ое)\s+запуск)\b'
+  weight: -2
+  ru: активность похожа на санкционированное тестирование (пентест, учения)
+  en: the activity looks like authorized testing (pentest, red team exercise)

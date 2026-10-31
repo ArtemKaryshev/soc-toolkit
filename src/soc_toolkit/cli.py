@@ -219,48 +219,98 @@ def ioc_email(path: Path) -> None:
 
 # --------------------------------------------------------------------------- отчёты
 
+def _parse_alert_or_exit(text: str) -> Any:
+    from .alerts import parse_alert
+
+    try:
+        return parse_alert(text)
+    except json.JSONDecodeError as e:
+        err.print(f"[red]Не удалось разобрать алерт:[/red] {e.msg}")
+        raise typer.Exit(2) from e
+
+
+@app.command()
+def triage(
+    alert_file: Annotated[str, typer.Argument(help="Алерт (JSON, NDJSON, CEF, key=value, XML) или '-'")],
+    lang: Annotated[str, typer.Option("--lang", "-l", help="ru | en")] = "ru",
+    as_json: Annotated[bool, typer.Option("--json", help="Вывести результат в JSON")] = False,
+) -> None:
+    """Рекомендация по алерту: TP/FP, уверенность, эскалация и признаки."""
+    from .reports import category_title
+    from .triage import assess, specific_remediation
+
+    _, text = _read_input(alert_file)
+    alert = _parse_alert_or_exit(text)
+    x = assess(alert)
+    if as_json:
+        print(json.dumps({
+            "alert": alert.name, "format": alert.source_format, "verdict": x.verdict, "certain": x.certain,
+            "confidence": x.confidence, "score": x.score, "category": x.category, "outcome": x.outcome,
+            "escalate": x.escalate, "escalation_reason": x.escalation_why[lang],
+            "factors": [{"id": f.id, "weight": f.weight, "text": f.text(lang)} for f in x.factors + x.impact],
+            "remediation": specific_remediation(alert, x, lang),
+        }, ensure_ascii=False, indent=2))
+        return
+    cat = category_title("fp" if x.verdict == "FP" and x.certain else x.category, lang)
+    color = "yellow" if not x.certain else "red" if x.verdict == "TP" else "green"
+    console.print(f"[bold]{alert.name or 'Алерт без названия'}[/bold] ({alert.source_format})", highlight=False)
+    console.print(f"Рекомендация: [{color}][bold]{x.label(lang)}[/bold][/{color}], уверенность {x.confidence}%, "
+                  f"категория «{cat}», эскалация: "
+                  f"{'[red]нужна[/red]' if x.escalate else '[green]не нужна[/green]'}", highlight=False)
+    _table([{"вес": f"{f.weight:+d}" if f.weight else "0", "признак": f.text(lang)} for f in x.factors + x.impact],
+           title="Признаки")
+    console.print(x.escalation_why[lang], highlight=False, markup=False)
+
+
 @app.command()
 def report(
-    alert_file: Annotated[str, typer.Argument(help="JSON алерта или '-'")],
-    verdict: Annotated[str, typer.Option("--verdict", "-v", help="TP или FP")] = "TP",
+    alert_file: Annotated[str, typer.Argument(help="Алерт (JSON, NDJSON, CEF, key=value, XML) или '-'")],
+    verdict: Annotated[str, typer.Option("--verdict", "-v", help="auto (рекомендация), TP или FP")] = "auto",
     reason: Annotated[str, typer.Option("--reason", "-r",
-                                        help="Обоснование вердикта (по умолчанию черновик по уликам)")] = "",
-    escalate: Annotated[bool, typer.Option("--escalate/--no-escalate")] = False,
+                                        help="Обоснование вердикта (по умолчанию составляется по уликам)")] = "",
+    escalate: Annotated[bool | None, typer.Option("--escalate/--no-escalate",
+                                                  help="По умолчанию по рекомендации")] = None,
     escalation_reason: Annotated[str, typer.Option("--escalation-reason")] = "",
-    category: Annotated[str, typer.Option("--category", "-c", help="generic, phishing, malware, ...")] = "generic",
+    category: Annotated[str, typer.Option("--category", "-c", help="auto, generic, phishing, malware, ...")] = "auto",
     lang: Annotated[str, typer.Option("--lang", "-l", help="ru | en")] = "",
     fmt: Annotated[str, typer.Option("--format", "-f", help="md | html | docx")] = "md",
     output: Annotated[Path | None, typer.Option("--output", "-o", help="Файл для сохранения")] = None,
     save_case: Annotated[bool, typer.Option("--save-case", help="Сохранить разбор в историю")] = False,
 ) -> None:
-    """Сформировать отчёт по алерту (поля шаблона TryHackMe SOC)."""
-    from .alerts import parse_alert
+    """Сформировать отчёт по алерту (поля шаблона TryHackMe SOC) с вердиктом и эскалацией по рекомендации."""
     from .cases import Case, CaseStore
     from .reports import (
         ReportInput,
         categories,
+        default_remediation,
         draft_escalation,
         draft_reason,
         render_docx,
         render_html,
         render_markdown,
     )
+    from .triage import assess, specific_remediation
 
     s = _settings()
-    if category not in categories():
-        err.print(f"[red]Неизвестная категория.[/red] Доступны: {', '.join(categories())}")
+    if category != "auto" and category not in categories():
+        err.print(f"[red]Неизвестная категория.[/red] Доступны: auto, {', '.join(categories())}")
+        raise typer.Exit(2)
+    if verdict.upper() not in ("AUTO", "TP", "FP"):
+        err.print("[red]Вердикт:[/red] auto, TP или FP")
         raise typer.Exit(2)
     _, text = _read_input(alert_file)
-    try:
-        alert = parse_alert(text)
-    except json.JSONDecodeError as e:
-        err.print(f"[red]Некорректный JSON:[/red] {e}")
-        raise typer.Exit(2) from e
+    alert = _parse_alert_or_exit(text)
+    x = assess(alert)
+    verdict = x.verdict if verdict.upper() == "AUTO" else verdict.upper()
+    category = x.category if category == "auto" else category
+    if escalate is None:
+        escalate = x.escalate if verdict == x.verdict else verdict == "TP"
     lang = lang or s.report.default_language
-    reason = reason or draft_reason(alert, verdict, lang)
-    if escalate and not escalation_reason:
-        escalation_reason = draft_escalation(alert, category, lang)
-    inp = ReportInput(verdict.upper(), reason, escalate, escalation_reason, category, lang=lang,
+    reason = reason or draft_reason(alert, verdict, lang, assessment=x)
+    escalation_reason = escalation_reason or draft_escalation(alert, category, lang, escalate, assessment=x)
+    remediation = specific_remediation(alert, x, lang) if verdict == x.verdict else []
+    remediation += [r for r in default_remediation(category, verdict, lang) if r not in remediation]
+    inp = ReportInput(verdict, reason, escalate, escalation_reason, category, remediation=remediation, lang=lang,
                       analyst=s.report.analyst_name, defang=s.report.defang_indicators)
     case: Case | None = None
     store = CaseStore(s.cases_path) if save_case else None

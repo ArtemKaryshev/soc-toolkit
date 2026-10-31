@@ -1,214 +1,167 @@
-"""Черновик обоснования вердикта и причины эскалации по уликам из алерта.
+"""Тексты разделов отчёта «Reason for Classifying» и «Reason for Escalating» по оценке алерта.
 
-Текст собирается из того, что действительно есть в алерте: время, хосты, пользователи,
-признаки в командной строке (эвристики MITRE), последовательность событий, внешние
-индикаторы и их репутация. Это заготовка: аналитик дописывает то, что проверил сам.
+Текст строится из того, что действительно есть в алерте и что нашёл движок оценки (triage):
+кто, где и когда, признаки за и против, раскодированная команда, репутация, техники MITRE
+и вывод. Если аналитик выбрал вердикт, отличный от рекомендации, текст строится под его выбор,
+а место для подтверждения помечается квадратными скобками.
 """
 
 from __future__ import annotations
 
-import json
 import re
-from collections import Counter
 
 from ..alerts import AlertSummary
-from ..alerts.parser import _collect, _flatten, mitre_hints
-from ..ioc import IOCType, find_encoded
+from ..ioc import IOCType
 from ..reference import technique_name
+from ..triage import Assessment, assess
+from ..triage.engine import NEEDS, decoded_commands
 
-# Что нужно от L2 в зависимости от категории
-ESCALATION_NEEDS = {
-    "ru": {
-        "phishing": "проверить, кто ещё получил письмо, переходил ли пользователь по ссылке и вводил ли учётные "
-                    "данные, удалить письма из ящиков и заблокировать отправителя",
-        "malware": "изолировать хост, собрать артефакты (память, автозагрузка, задачи, службы), проанализировать "
-                   "полезную нагрузку и проверить другие хосты на те же индикаторы",
-        "bruteforce": "заблокировать источник, сбросить пароль скомпрометированной учётной записи и проверить "
-                      "действия атакующего после входа",
-        "lateral": "определить все затронутые хосты и учётные записи, изолировать их и найти точку входа",
-        "credential_access": "сбросить учётные данные всех пользователей, входивших на хост, и проверить "
-                             "их использование на других системах",
-        "exfiltration": "оценить объём и состав переданных данных, заблокировать адрес назначения и подключить "
-                        "ответственного за защиту данных",
-        "ransomware": "немедленно изолировать хосты и сегменты сети и запустить процедуру реагирования на инцидент",
-        "generic": "провести углублённый анализ хоста и учётной записи и определить масштаб инцидента",
-    },
-    "en": {
-        "phishing": "identify other recipients, check whether the user clicked the link or entered credentials, "
-                    "purge the emails and block the sender",
-        "malware": "isolate the host, collect artifacts (memory, autoruns, tasks, services), analyse the payload "
-                   "and hunt for the same indicators on other hosts",
-        "bruteforce": "block the source, reset the compromised account password and review the attacker's actions "
-                      "after the logon",
-        "lateral": "identify all affected hosts and accounts, isolate them and find the initial access point",
-        "credential_access": "reset credentials of all users who logged on to the host and check their use on "
-                             "other systems",
-        "exfiltration": "estimate the volume and content of transferred data, block the destination and involve "
-                        "the data protection officer",
-        "ransomware": "immediately isolate hosts and network segments and start the incident response procedure",
-        "generic": "perform in-depth analysis of the host and account and determine the scope of the incident",
-    },
-}
+NET = (IOCType.URL, IOCType.DOMAIN, IOCType.IPV4, IOCType.IPV6)
 
 T = {
     "ru": {
         "fired": "Правило «{name}» сработало{when}",
         "on_hosts": " на хосте {hosts}",
         "for_users": " для пользователя {users}",
-        "signs": "В активности обнаружены признаки: {signs}.",
-        "parent": "Процесс запущен из {parent}, что нетипично для легитимной работы.",
-        "bruteforce_ok": "Зафиксировано {fail} неудачных входов (4625) и затем {ok} успешный вход (4624) с адреса "
-                         "{src}: подбор пароля завершился успешно.",
-        "bruteforce_fail": "Зафиксировано {fail} неудачных входов (4625) с адреса {src}; успешных входов нет.",
-        "events": "Связанные события: {events}.",
-        "decoded": "В раскодированной команде найдены индикаторы: {items}.",
+        "tp_signs": "Признаки вредоносной активности:",
+        "fp_signs": "Признаки легитимной активности:",
+        "against": "Против этого вывода говорит:",
+        "explained": "Сработавшие признаки объясняются легитимной работой:",
         "decoded_cmd": "Закодированная команда после декодирования: `{cmd}`.",
-        "rep_bad": "Репутация подтверждает вредоносность: {items}.",
-        "rep_none": "Внешние индикаторы: {items} (репутацию стоит проверить).",
-        "mitre": "Активность соответствует техникам MITRE ATT&CK: {items}.",
-        "tp_end": "Совокупность признаков указывает на вредоносную активность, поэтому алерт классифицирован "
+        "mitre": "Техники MITRE ATT&CK: {items}.",
+        "ext": "Внешние индикаторы: {items} (репутация не проверялась, проверьте на вкладке «Индикаторы и "
+               "репутация»).",
+        "blocked": "Средство защиты заблокировало активность ({action}).",
+        "tp_end": "Вывод: совокупность признаков указывает на вредоносную активность, поэтому алерт классифицирован "
                   "как True Positive.",
-        "fp_body": "Активность проверена и признана легитимной: [укажите подтверждение — плановая задача, "
-                   "администратор, заявка на изменение, известное ПО]. ",
-        "fp_rep_clean": "Внешние индикаторы ({items}) имеют чистую репутацию. ",
-        "fp_no_ext": "Внешних индикаторов не обнаружено. ",
-        "fp_end": "Признаков компрометации нет, поэтому алерт классифицирован как False Positive.",
-        "esc": "Подтверждена вредоносная активность{where} (критичность: {sev}). Требуется эскалация на L2, чтобы "
-               "{need}.",
-        "esc_none": "не указана",
+        "tp_unsure": "Вывод: признаков недостаточно, чтобы уверенно исключить атаку, поэтому алерт классифицирован "
+                     "как True Positive до проверки на L2.",
+        "tp_manual": "[Укажите, что подтвердило вредоносность: результаты проверки хоста, ответ пользователя, "
+                     "дополнительные события.]",
+        "fp_manual": "[Укажите подтверждение легитимности: плановая задача, действия администратора, заявка на "
+                     "изменение, известное ПО.]",
+        "fp_none": "Признаков компрометации не обнаружено: нет выполнения закодированных команд, загрузки файлов из "
+                   "интернета, обращений к вредоносным адресам и успешного входа атакующего.",
+        "no_ext": "Обращений к внешним адресам в алерте нет.",
+        "fp_end": "Вывод: активность легитимна, поэтому алерт классифицирован как False Positive.",
+        "esc_forced": "Аналитик принял решение об эскалации{where}. Требуется эскалация на L2, чтобы {need}.",
+        "no_esc_forced": "Эскалация не требуется: по результатам проверки аналитика угроза устранена на L1.",
     },
     "en": {
         "fired": "Rule \"{name}\" fired{when}",
         "on_hosts": " on host {hosts}",
         "for_users": " for user {users}",
-        "signs": "The activity shows the following signs: {signs}.",
-        "parent": "The process was spawned by {parent}, which is atypical for legitimate use.",
-        "bruteforce_ok": "{fail} failed logons (4625) followed by {ok} successful logon (4624) from {src} were "
-                         "recorded: the brute force attempt succeeded.",
-        "bruteforce_fail": "{fail} failed logons (4625) from {src} were recorded; no successful logons.",
-        "events": "Related events: {events}.",
-        "decoded": "Indicators found in the decoded command: {items}.",
+        "tp_signs": "Signs of malicious activity:",
+        "fp_signs": "Signs of legitimate activity:",
+        "against": "Evidence against this conclusion:",
+        "explained": "The triggered signs are explained by legitimate activity:",
         "decoded_cmd": "The encoded command decodes to: `{cmd}`.",
-        "rep_bad": "Reputation confirms maliciousness: {items}.",
-        "rep_none": "External indicators: {items} (reputation should be checked).",
-        "mitre": "The activity maps to MITRE ATT&CK techniques: {items}.",
-        "tp_end": "Taken together, the evidence indicates malicious activity, so the alert is classified as "
-                  "True Positive.",
-        "fp_body": "The activity was reviewed and found legitimate: [state the confirmation — scheduled task, "
-                   "administrator, change request, known software]. ",
-        "fp_rep_clean": "External indicators ({items}) have a clean reputation. ",
-        "fp_no_ext": "No external indicators were found. ",
-        "fp_end": "There are no signs of compromise, so the alert is classified as False Positive.",
-        "esc": "Malicious activity is confirmed{where} (severity: {sev}). Escalation to L2 is required to {need}.",
-        "esc_none": "not specified",
+        "mitre": "MITRE ATT&CK techniques: {items}.",
+        "ext": "External indicators: {items} (reputation not checked yet).",
+        "blocked": "The security control blocked the activity ({action}).",
+        "tp_end": "Conclusion: taken together, the evidence indicates malicious activity, so the alert is classified "
+                  "as True Positive.",
+        "tp_unsure": "Conclusion: the evidence is not enough to rule out an attack, so the alert is classified as "
+                     "True Positive pending L2 review.",
+        "tp_manual": "[State what confirmed maliciousness: host review results, user response, additional events.]",
+        "fp_manual": "[State the confirmation of legitimacy: scheduled task, administrator action, change request, "
+                     "known software.]",
+        "fp_none": "No signs of compromise were found: no encoded commands, no downloads from the internet, no "
+                   "connections to malicious addresses and no successful attacker logon.",
+        "no_ext": "The alert contains no connections to external addresses.",
+        "fp_end": "Conclusion: the activity is legitimate, so the alert is classified as False Positive.",
+        "esc_forced": "The analyst decided to escalate{where}. Escalation to L2 is required to {need}.",
+        "no_esc_forced": "Escalation is not required: according to the analyst's review the threat was resolved "
+                         "at L1.",
     },
 }
-
-OFFICE = ("winword", "excel", "powerpnt", "outlook", "onenote", "mshta", "wscript", "cscript")
-BAD = ("malicious", "suspicious")
 
 
 def _short(values: list[str], limit: int = 3) -> str:
     return ", ".join(values[:limit]) + (f" (+{len(values) - limit})" if len(values) > limit else "")
 
 
-def _when(a: AlertSummary, lang: str) -> str:
-    if not a.first_seen:
-        return ""
-    if lang == "ru":
-        return f" {a.first_seen}"
-    return f" at {a.first_seen}"
-
-
-def _collect_all_event_ids(a: AlertSummary) -> list[str]:
-    if a.raw is None:
-        return a.event_ids
-    out: list[str] = []
-    for path, value in _flatten(a.raw):
-        if _collect([(path, value)], "event_id"):
-            out.append(str(value))
-    return out
-
-
-def draft_reason(a: AlertSummary, verdict: str, lang: str = "ru",
-                 reputation: dict[str, str] | None = None) -> str:
-    """Черновик раздела «Reason for Classifying as TP/FP»."""
-    lang = lang if lang in T else "ru"
-    t = T[lang]
-    reputation = reputation or {}
-    external = [i for i in a.iocs if i.is_external and i.type not in (IOCType.FILENAME,)]
-    ext_names = [i.defanged for i in external]
-
-    if verdict.upper() == "FP":
-        clean = [i.defanged for i in external if reputation.get(i.value) == "clean"]
-        text = t["fp_body"]
-        if clean and len(clean) == len(external):
-            text += t["fp_rep_clean"].format(items=_short(clean))
-        elif not external:
-            text += t["fp_no_ext"]
-        return text + t["fp_end"]
-
-    parts = []
-    head = t["fired"].format(name=a.name or "?", when=_when(a, lang))
+def _head(a: AlertSummary, t: dict[str, str], lang: str) -> str:
+    when = (f" {a.first_seen}" if lang == "ru" else f" at {a.first_seen}") if a.first_seen else ""
+    head = t["fired"].format(name=a.name or "?", when=when)
     if a.hosts:
         head += t["on_hosts"].format(hosts=_short(a.hosts))
     if a.users:
         head += t["for_users"].format(users=_short(a.users))
-    parts.append(head + ".")
-
-    # Признаки ищем по всему алерту, даже если техника уже указана в нём явно
-    blob = json.dumps(a.raw, ensure_ascii=False) if a.raw is not None else " ".join(a.commands)
-    signs = [reason for rx, _, reason in mitre_hints() if rx.search(blob)]
-    if signs and lang == "ru":
-        parts.append(t["signs"].format(signs="; ".join(dict.fromkeys(signs)).lower()))
-
-    parents = [p for p in a.parent_processes if any(o in p.lower() for o in OFFICE)]
-    if parents:
-        parts.append(t["parent"].format(parent=parents[0].replace("\\\\", "\\").split("\\")[-1]))
-
-    # Считаем каждое вхождение EventID (в списке a.event_ids значения уникальны)
-    counts = Counter(_collect_all_event_ids(a))
-    if counts.get("4625"):
-        src = _short(a.src_ips) or "?"
-        key = "bruteforce_ok" if counts.get("4624") else "bruteforce_fail"
-        parts.append(t[key].format(fail=counts["4625"], ok=counts.get("4624", 0), src=src))
-    elif a.event_ids:
-        parts.append(t["events"].format(events=", ".join(dict.fromkeys(a.event_ids))))
-
-    for cmd in a.commands:
-        blobs = [b for b in find_encoded(cmd) if b.kind == "powershell"]
-        if blobs:
-            text = re.sub(r"\s+", " ", blobs[0].decoded).strip()
-            parts.append(t["decoded_cmd"].format(cmd=text[:200] + ("…" if len(text) > 200 else "")))
-            break
-
-    decoded = [i.defanged for i in a.iocs if "decoded" in i.tags and i.type in (IOCType.URL, IOCType.IPV4,
-                                                                                  IOCType.DOMAIN)]
-    if decoded:
-        parts.append(t["decoded"].format(items=_short(decoded)))
-
-    bad = [f"{i.defanged} ({reputation[i.value]})" for i in external if reputation.get(i.value) in BAD]
-    if bad:
-        parts.append(t["rep_bad"].format(items=_short(bad)))
-    elif ext_names:
-        parts.append(t["rep_none"].format(items=_short(ext_names)))
-
-    if a.mitre:
-        items = [f"{h.technique} {technique_name(h.technique)}".strip() for h in a.mitre]
-        parts.append(t["mitre"].format(items="; ".join(items[:5])))
-
-    parts.append(t["tp_end"])
-    return " ".join(parts)
+    return head + "."
 
 
-def draft_escalation(a: AlertSummary, category: str, lang: str = "ru") -> str:
-    """Черновик раздела «Reason for Escalating the Alert»."""
+def _cap(line: str) -> str:
+    # Имя файла или команды в начале строки оставляем как есть: powershell.exe, 8 неудачных входов
+    first = line.split(" ", 1)[0]
+    return line if "." in first or any(c.isdigit() for c in first) else line[:1].upper() + line[1:]
+
+
+def _bullets(title: str, lines: list[str]) -> str:
+    return title + "\n" + "\n".join(f"- {_cap(ln)}" for ln in lines)
+
+
+def draft_reason(a: AlertSummary, verdict: str, lang: str = "ru", reputation: dict[str, str] | None = None,
+                 assessment: Assessment | None = None) -> str:
+    """Текст раздела «Reason for Classifying as TP/FP»."""
     lang = lang if lang in T else "ru"
     t = T[lang]
-    needs = ESCALATION_NEEDS[lang]
-    targets = a.hosts + [u for u in a.users if u not in a.hosts]
-    if lang == "ru":
-        where = f" на {_short(targets)}" if targets else ""
-    else:
-        where = f" on {_short(targets)}" if targets else ""
-    return t["esc"].format(where=where, sev=a.severity or t["esc_none"], need=needs.get(category, needs["generic"]))
+    x = assessment or assess(a, reputation)
+    tp = [f.text(lang) for f in x.tp_factors]
+    real_fp = [f.text(lang) for f in x.fp_factors if f.id != "nothing"]
+    blocks = [_head(a, t, lang)]
+
+    if verdict.upper() == "FP":
+        if real_fp:
+            blocks.append(_bullets(t["fp_signs"], real_fp))
+        if tp:
+            blocks.append(_bullets(t["explained"], tp))
+        if x.verdict != "FP" or not x.certain:
+            blocks.append(t["fp_manual"])
+        elif not tp:
+            blocks.append(t["fp_none"])
+        if not any(i.is_external for i in a.iocs if i.type in NET):
+            blocks.append(t["no_ext"])
+        blocks.append(t["fp_end"])
+        return "\n\n".join(blocks)
+
+    if tp:
+        blocks.append(_bullets(t["tp_signs"], tp))
+    cmds = decoded_commands(a)
+    if cmds:
+        text = re.sub(r"\s+", " ", cmds[0]).strip()
+        blocks.append(t["decoded_cmd"].format(cmd=text[:200] + ("…" if len(text) > 200 else "")))
+    unchecked = [i.defanged for i in a.iocs if i.is_external and i.type in (IOCType.URL, IOCType.DOMAIN, IOCType.IPV4)
+                 and (reputation or {}).get(i.value) in (None, "", "unknown")]
+    if unchecked:
+        blocks.append(t["ext"].format(items=_short(unchecked, 4)))
+    if x.outcome == "blocked" and a.outcomes:
+        blocks.append(t["blocked"].format(action=_short(a.outcomes, 2)))
+    if a.mitre:
+        items = [f"{h.technique} {technique_name(h.technique)}".strip() for h in a.mitre]
+        blocks.append(t["mitre"].format(items="; ".join(items[:5])))
+    if real_fp:
+        blocks.append(_bullets(t["against"], real_fp))
+    if x.verdict == "FP" and x.certain:
+        blocks.append(t["tp_manual"])
+    blocks.append(t["tp_end"] if x.certain or x.verdict == "FP" else t["tp_unsure"])
+    return "\n\n".join(blocks)
+
+
+def draft_escalation(a: AlertSummary, category: str, lang: str = "ru", escalate: bool | None = None,
+                     reputation: dict[str, str] | None = None, assessment: Assessment | None = None) -> str:
+    """Текст раздела «Reason for Escalating the Alert».
+
+    escalate=None: взять решение движка. Если аналитик решил иначе, текст строится под его решение.
+    """
+    lang = lang if lang in T else "ru"
+    t = T[lang]
+    x = assessment or assess(a, reputation)
+    if escalate is None or escalate == x.escalate:
+        return x.escalation_why[lang]
+    if escalate:
+        targets = a.hosts + [u for u in a.users if u not in a.hosts]
+        where = (f" по {_short(targets)}" if lang == "ru" else f" for {_short(targets)}") if targets else ""
+        need = NEEDS[lang].get(category, NEEDS[lang]["generic"])
+        return t["esc_forced"].format(where=where, need=need)
+    return t["no_esc_forced"]
